@@ -14,6 +14,7 @@ from qgis.core import (
     QgsMapLayer,
     QgsProcessingParameterDefinition,
     QgsRasterBandStats,
+    QgsVectorSimplifyMethod,
     QgsWkbTypes,
 )
 from qgis.PyQt.QtCore import QIODevice, Qt
@@ -108,3 +109,11 @@ try:
     TOOLBUTTON_ICON_ONLY = Qt.ToolButtonStyle.ToolButtonIconOnly
 except AttributeError:
     TOOLBUTTON_ICON_ONLY = Qt.ToolButtonIconOnly
+
+# ── Vector simplification hints ─────────────────────────────────────
+try:
+    SIMPLIFY_GEOMETRY = QgsVectorSimplifyMethod.SimplifyHint.GeometrySimplification
+    SIMPLIFY_ANTIALIAS = QgsVectorSimplifyMethod.SimplifyHint.AntialiasingSimplification
+except AttributeError:
+    SIMPLIFY_GEOMETRY = QgsVectorSimplifyMethod.GeometrySimplification
+    SIMPLIFY_ANTIALIAS = QgsVectorSimplifyMethod.AntialiasingSimplification

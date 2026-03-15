@@ -51,9 +51,10 @@ from qgis.core import (
     QgsSymbol,
     QgsVectorLayer,
     QgsVectorLayerJoinInfo,
+    QgsVectorSimplifyMethod,
     QgsWkbTypes,
 )
-from qgis.PyQt.QtCore import QBuffer, QByteArray, QObject, QProcess, QSize, QTimer, QUrl, QVariant
+from qgis.PyQt.QtCore import QBuffer, QByteArray, QEventLoop, QObject, QProcess, QSize, QTimer, QUrl, QVariant
 from qgis.PyQt.QtGui import QColor, QDesktopServices, QIcon
 from qgis.PyQt.QtWidgets import (
     QAction,
@@ -95,6 +96,8 @@ from .compat import (
     MSG_WARNING,
     PROCESSING_OPTIONAL,
     RASTER_STATS_ALL,
+    SIMPLIFY_ANTIALIAS,
+    SIMPLIFY_GEOMETRY,
     TOOLBUTTON_ICON_ONLY,
     TOOLBUTTON_MENU_POPUP,
 )
@@ -958,6 +961,8 @@ class QgisMCPServer(QObject):
         else:
             raise Exception(f"Failed to save project to {path}")
 
+    _RENDER_TIMEOUT = 55  # seconds (below MCP's 60s TIMEOUT_LONG)
+
     def render_map_base64(self, width=800, height=600, path=None, **kwargs):
         """Render the map and return base64-encoded PNG data."""
         try:
@@ -970,9 +975,35 @@ class QgisMCPServer(QObject):
             ms.setBackgroundColor(QColor(255, 255, 255))
             ms.setOutputDpi(96)
 
+            # Enable geometry simplification (matches QGIS canvas defaults).
+            # Skips sub-pixel vertices — critical for large datasets at small scales.
+            simplify = QgsVectorSimplifyMethod()
+            simplify.setSimplifyHints(SIMPLIFY_GEOMETRY | SIMPLIFY_ANTIALIAS)
+            simplify.setThreshold(1.0)  # 1 pixel
+            simplify.setForceLocalOptimization(True)
+            ms.setSimplifyMethod(simplify)
+
             render = QgsMapRendererParallelJob(ms)
+
+            # Use QEventLoop + QTimer for non-blocking wait with timeout.
+            # Keeps Qt event loop alive and allows cancellation.
+            loop = QEventLoop()
+            timed_out = []
+            render.finished.connect(loop.quit)
+
+            timeout_timer = QTimer()
+            timeout_timer.setSingleShot(True)
+            timeout_timer.timeout.connect(lambda: (timed_out.append(True), loop.quit()))
+            timeout_timer.start(self._RENDER_TIMEOUT * 1000)
+
             render.start()
-            render.waitForFinished()
+            loop.exec_()
+
+            timeout_timer.stop()
+            if timed_out:
+                render.cancelWithoutBlocking()
+                render.waitForFinished()
+                raise Exception(f"Render timed out after {self._RENDER_TIMEOUT}s")
 
             img = render.renderedImage()
 
