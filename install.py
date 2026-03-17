@@ -260,18 +260,38 @@ def configure_client(client_name: str, remote: bool) -> None:
     registry = _client_registry()
     info = registry[client_name]
 
-    # Claude Code: print command only
+    # Claude Code: use `claude mcp` CLI
     if info.get("print_only"):
+        claude_bin = shutil.which("claude")
+        if not claude_bin:
+            print("  'claude' CLI not found in PATH – skipping.")
+            return
+
         if remote:
-            cmd = f'claude mcp add qgis -- uvx --from "{GITHUB_URL}" qgis-mcp-server'
+            add_args = ["uvx", "--from", GITHUB_URL, "qgis-mcp-server"]
         elif shutil.which("uv"):
-            cmd = "claude mcp add qgis -- uv run --no-sync src/qgis_mcp/server.py"
-            print(f"  Run this from {REPO_DIR}:")
+            add_args = [
+                "uv", "run", "--no-sync",
+                "--directory", str(REPO_DIR),
+                "src/qgis_mcp/server.py",
+            ]
         else:
-            python = str(_venv_python())
-            server = str(REPO_DIR / "src" / "qgis_mcp" / "server.py")
-            cmd = f'claude mcp add qgis -- "{python}" "{server}"'
-        print(f"  {cmd}")
+            add_args = [str(_venv_python()), str(REPO_DIR / "src" / "qgis_mcp" / "server.py")]
+
+        # Remove existing entry first (ignore errors if not present)
+        subprocess.run(
+            [claude_bin, "mcp", "remove", "-s", "user", "qgis"],
+            capture_output=True,
+        )
+        result = subprocess.run(
+            [claude_bin, "mcp", "add", "-s", "user", "qgis", "--"] + add_args,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            print("  Configured Claude Code (user scope).")
+        else:
+            print(f"  Failed to configure Claude Code: {result.stderr.strip()}")
         return
 
     path = Path(info["path"])
@@ -293,7 +313,19 @@ def unconfigure_client(client_name: str) -> None:
     info = registry[client_name]
 
     if info.get("print_only"):
-        print("  Run: claude mcp remove qgis")
+        claude_bin = shutil.which("claude")
+        if not claude_bin:
+            print("  'claude' CLI not found in PATH – skipping.")
+            return
+        result = subprocess.run(
+            [claude_bin, "mcp", "remove", "-s", "user", "qgis"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            print("  Removed qgis from Claude Code.")
+        else:
+            print(f"  Not configured in Claude Code: {result.stderr.strip()}")
         return
 
     path = Path(info["path"])

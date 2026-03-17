@@ -84,10 +84,16 @@ Create a `.mcp.json` file at the root of your clone:
 
 Claude Code automatically detects `.mcp.json` when you open the project — no manual `claude mcp add` needed.
 
-##### Claude Code — one-liner (remote install)
+##### Claude Code — user-scope (works from any project)
 
 ```bash
-claude mcp add --transport stdio qgis-mcp -- uvx --from git+https://github.com/nkarasiak/qgis-mcp qgis-mcp-server
+claude mcp add -s user qgis -- uv run --no-sync --directory /path/to/qgis-mcp src/qgis_mcp/server.py
+```
+
+##### Claude Code — remote install (no local clone needed)
+
+```bash
+claude mcp add -s user qgis -- uvx --from git+https://github.com/nkarasiak/qgis-mcp qgis-mcp-server
 ```
 
 ##### Claude Desktop
