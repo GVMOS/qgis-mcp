@@ -470,6 +470,69 @@ async def test_list_processing_algorithms_tool(mock_connection):
 
 
 @pytest.mark.asyncio
+async def test_create_processing_model_tool(mock_connection):
+    mock_connection.send_command.return_value = {
+        "status": "success",
+        "result": {
+            "ok": True,
+            "name": "buffer_centroids",
+            "path": "/tmp/buffer_centroids.model3",
+            "registered": False,
+            "registered_path": None,
+            "input_count": 2,
+            "step_count": 2,
+            "output_count": 1,
+        },
+    }
+    from qgis_mcp.server import create_processing_model
+
+    ctx = _make_ctx()
+    inputs = [
+        {"name": "input_layer", "type": "vector", "description": "Input vector layer"},
+        {"name": "distance", "type": "distance", "default": 100},
+    ]
+    steps = [
+        {
+            "id": "buffer",
+            "algorithm": "native:buffer",
+            "parameters": {"INPUT": "@input_layer", "DISTANCE": "@distance", "DISSOLVE": False},
+        },
+        {
+            "id": "centroids",
+            "algorithm": "native:centroids",
+            "parameters": {"INPUT": "$buffer.OUTPUT", "ALL_PARTS": False},
+        },
+    ]
+    outputs = [{"name": "Centroids", "from_step": "centroids", "from_output": "OUTPUT"}]
+
+    output = await create_processing_model(
+        ctx,
+        name="buffer_centroids",
+        steps=steps,
+        inputs=inputs,
+        outputs=outputs,
+        path="/tmp/buffer_centroids.model3",
+    )
+    assert output["ok"] is True
+    assert output["step_count"] == 2
+
+    # Long timeout, full payload forwarded
+    mock_connection.send_command.assert_called_once()
+    call_args = mock_connection.send_command.call_args
+    assert call_args[0][0] == "create_processing_model"
+    sent = call_args[0][1]
+    assert sent["name"] == "buffer_centroids"
+    assert sent["steps"] == steps
+    assert sent["inputs"] == inputs
+    assert sent["outputs"] == outputs
+    assert sent["path"] == "/tmp/buffer_centroids.model3"
+    assert sent["register"] is False
+    assert sent["overwrite"] is False
+    # Uses the long timeout for processing operations
+    assert call_args[1]["timeout"] == 60
+
+
+@pytest.mark.asyncio
 async def test_get_algorithm_help_tool(mock_connection):
     mock_connection.send_command.return_value = {
         "status": "success",

@@ -271,7 +271,7 @@ mcp = FastMCP(
 
 
 # ===========================================================================
-# MCP TOOLS (51 total)
+# MCP TOOLS (52 total)
 # ===========================================================================
 
 # --- Connectivity & Info ---
@@ -721,6 +721,64 @@ async def list_processing_algorithms(
 )
 async def get_algorithm_help(ctx: Context, algorithm_id: str) -> dict[str, Any]:
     return await _send("get_algorithm_help", {"algorithm_id": algorithm_id})
+
+
+@mcp.tool(
+    title="Create Processing Model",
+    description=(
+        "Build and save a QGIS Processing Model (.model3 workflow) from a structured spec. "
+        "This is the only call needed: algorithm discovery and parameter validation happen "
+        "inside the plugin against the live QGIS Processing registry — DO NOT call "
+        "list_processing_algorithms or get_algorithm_help first. Pass a keyword like 'buffer' "
+        "or 'centroids' (or a full id like 'native:buffer') and the handler resolves it; on an "
+        "ambiguous hint it returns the candidate list so you can refine and retry. Unknown "
+        "parameter or output names are reported with the valid set for the algorithm.\n\n"
+        "Spec shape:\n"
+        "  inputs: [{name, type, description?, default?, optional?, parent_layer? (for 'field'/'distance'), "
+        "options? (for 'enum')}]. Types: vector, feature_source, raster, field, number, integer, distance, "
+        "string, boolean, extent, crs, point, file, folder, enum, multiple_layers.\n"
+        "  steps: [{id, algorithm, description?, parameters: {ALG_PARAM: value, ...}}]. "
+        "'algorithm' may be a fuzzy keyword or a full id. Step parameter values use:\n"
+        "    '@input_name'      – the value of a model input\n"
+        "    '$step_id.OUTPUT'  – an output of an earlier step\n"
+        "    '=expression'      – a QGIS expression evaluated at run time\n"
+        "    anything else      – a static literal (number, bool, string, list, ...)\n"
+        "  outputs: [{name, from_step, from_output, description?}] – final outputs the model exposes. "
+        "If omitted, the OUTPUT of the last step is exposed automatically as 'Result'.\n\n"
+        "Save modes: pass 'path' to save anywhere, or set register=True to also copy the model into the "
+        "user's Processing models folder so it appears in the Processing Toolbox after refresh.\n\n"
+        "The response echoes 'resolved_steps' so the caller can verify which algorithm each hint mapped to."
+    ),
+    structured_output=True,
+)
+async def create_processing_model(
+    ctx: Context,
+    name: str,
+    steps: list[dict],
+    inputs: list[dict] | None = None,
+    outputs: list[dict] | None = None,
+    path: str | None = None,
+    description: str = "",
+    group: str = "Models",
+    register: bool = False,
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    await ctx.info(f"Building Processing model: {name} ({len(steps)} step(s))")
+    params: dict[str, Any] = {
+        "name": name,
+        "steps": steps,
+        "description": description,
+        "group": group,
+        "register": register,
+        "overwrite": overwrite,
+    }
+    if inputs is not None:
+        params["inputs"] = inputs
+    if outputs is not None:
+        params["outputs"] = outputs
+    if path is not None:
+        params["path"] = path
+    return await _send("create_processing_model", params, timeout=TIMEOUT_LONG)
 
 
 # --- Rendering ---
@@ -1369,7 +1427,7 @@ QGIS MCP connects QGIS Desktop to LLMs via the Model Context Protocol.
 - **Labeling**: get_layer_labeling, set_layer_labeling (field, font_size, color)
 - **Canvas**: get_canvas_extent, set_canvas_extent, get_canvas_screenshot, get_canvas_scale, set_canvas_scale
 - **Raster**: get_raster_info
-- **Processing**: execute_processing, list_processing_algorithms, get_algorithm_help
+- **Processing**: execute_processing, list_processing_algorithms, get_algorithm_help, create_processing_model
 - **Rendering**: render_map (re-render to image), get_canvas_screenshot (fast grab)
 - **Code**: execute_code (arbitrary PyQGIS)
 - **Batch**: batch_commands (multiple commands in one round-trip)
@@ -1459,6 +1517,38 @@ def spatial_analysis_prompt(
             f"3. Check that CRS matches; if not, reproject one layer first\n"
             f"4. Use execute_processing with the appropriate algorithm (e.g. native:intersection, native:union)\n"
             f"5. Report the result layer's feature count and fields"
+        )
+    ]
+
+
+@mcp.prompt(
+    name="create_processing_model",
+    description="Translate a natural-language workflow description into a saved QGIS Processing Model",
+)
+def create_processing_model_prompt(
+    description: str, path: str | None = None
+) -> list[UserMessage]:
+    target = (
+        f"Save the model to: {path}."
+        if path
+        else "Ask the user where to save the model, or pass register=True to drop it into the user's Processing models folder."
+    )
+    return [
+        UserMessage(
+            content=(
+                "Build a QGIS Processing Model that implements this workflow:\n\n"
+                f"\"{description}\"\n\n"
+                "Call the `create_processing_model` tool ONCE. Algorithm lookup and parameter "
+                "validation happen inside the plugin against QGIS's Processing registry — do NOT "
+                "call `list_processing_algorithms` or `get_algorithm_help`. For each step pass a "
+                "concise `algorithm` keyword (e.g. 'buffer', 'centroids', 'clip') or a full id; "
+                "if a keyword is ambiguous the tool returns the candidate list so you can retry "
+                "with a more specific hint. Reference model inputs as '@name', earlier step "
+                "outputs as '$step_id.OUTPUT', and QGIS expressions as '=expr'. "
+                f"{target} "
+                "After the call, summarize the resolved_steps it returned so the user can verify "
+                "the algorithm choices."
+            )
         )
     ]
 

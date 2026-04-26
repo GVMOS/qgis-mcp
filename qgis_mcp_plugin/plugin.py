@@ -33,6 +33,25 @@ from qgis.core import (
     QgsMapSettings,
     QgsMessageLog,
     QgsPointXY,
+    QgsProcessingModelAlgorithm,
+    QgsProcessingModelChildAlgorithm,
+    QgsProcessingModelChildParameterSource,
+    QgsProcessingModelOutput,
+    QgsProcessingModelParameter,
+    QgsProcessingParameterBoolean,
+    QgsProcessingParameterCrs,
+    QgsProcessingParameterDistance,
+    QgsProcessingParameterEnum,
+    QgsProcessingParameterExtent,
+    QgsProcessingParameterFeatureSource,
+    QgsProcessingParameterField,
+    QgsProcessingParameterFile,
+    QgsProcessingParameterMultipleLayers,
+    QgsProcessingParameterNumber,
+    QgsProcessingParameterPoint,
+    QgsProcessingParameterRasterLayer,
+    QgsProcessingParameterString,
+    QgsProcessingParameterVectorLayer,
     QgsProject,
     QgsRasterLayer,
     QgsRectangle,
@@ -44,7 +63,16 @@ from qgis.core import (
     QgsVectorLayer,
     QgsWkbTypes,
 )
-from qgis.PyQt.QtCore import QBuffer, QByteArray, QObject, QSize, QTimer, QUrl, QVariant
+from qgis.PyQt.QtCore import (
+    QBuffer,
+    QByteArray,
+    QObject,
+    QPointF,
+    QSize,
+    QTimer,
+    QUrl,
+    QVariant,
+)
 from qgis.PyQt.QtGui import QColor, QDesktopServices, QIcon
 from qgis.PyQt.QtWidgets import (
     QAction,
@@ -284,6 +312,7 @@ class QgisMCPServer(QObject):
                 "create_memory_layer": self.create_memory_layer,
                 "list_processing_algorithms": self.list_processing_algorithms,
                 "get_algorithm_help": self.get_algorithm_help,
+                "create_processing_model": self.create_processing_model,
                 "find_layer": self.find_layer,
                 "list_layouts": self.list_layouts,
                 "export_layout": self.export_layout,
@@ -1215,6 +1244,397 @@ class QgisMCPServer(QObject):
             "provider": alg.provider().id(),
             "parameters": params,
             "outputs": outputs,
+        }
+
+    # ------------------------------------------------------------------
+    # Processing Model construction
+    # ------------------------------------------------------------------
+
+    def _resolve_algorithm_id(self, hint, registry):
+        """Resolve an algorithm hint to a fully-qualified id (e.g. 'native:buffer').
+
+        Direct lookup against ``QgsApplication.processingRegistry()``: the LLM
+        passes a keyword like ``"buffer"`` or a full id, and this matches it
+        against algorithm ids, display names and tags. Falls back with a
+        candidate list when the hint is ambiguous, so the caller can refine.
+        """
+        if not isinstance(hint, str) or not hint.strip():
+            raise Exception("Algorithm hint must be a non-empty string")
+        hint_clean = hint.strip()
+
+        # 1. Exact id match (incl. fully qualified 'native:buffer').
+        alg = registry.algorithmById(hint_clean)
+        if alg is not None:
+            return alg.id()
+
+        hint_lower = hint_clean.lower()
+        exact_name = []   # display name == hint
+        suffix_id = []    # id suffix == hint (after ':')
+        contains = []     # display name or id suffix contains hint
+        for alg in registry.algorithms():
+            alg_id = alg.id()
+            id_suffix = alg_id.split(":", 1)[-1].lower()
+            disp = alg.displayName().lower()
+            if disp == hint_lower:
+                exact_name.append(alg)
+            elif id_suffix == hint_lower:
+                suffix_id.append(alg)
+            elif hint_lower in disp or hint_lower in id_suffix:
+                contains.append(alg)
+
+        def _pick(group):
+            if len(group) == 1:
+                return group[0].id()
+            natives = [a for a in group if a.provider().id() == "native"]
+            if len(natives) == 1:
+                return natives[0].id()
+            return None
+
+        for group in (exact_name, suffix_id, contains):
+            picked = _pick(group)
+            if picked:
+                return picked
+
+        all_candidates = exact_name + suffix_id + contains
+        if not all_candidates:
+            raise Exception(
+                f"No Processing algorithm matches '{hint_clean}'. "
+                "Pass a keyword found in the algorithm name or its full id (e.g. 'native:buffer')."
+            )
+        # Show up to 8 candidates so the LLM can disambiguate next call.
+        sample = ", ".join(
+            f"{a.id()} ({a.displayName()})"
+            for a in sorted(all_candidates, key=lambda a: (a.provider().id() != "native", len(a.id())))[:8]
+        )
+        raise Exception(
+            f"Algorithm hint '{hint_clean}' is ambiguous. Candidates: {sample}. "
+            "Use the full id."
+        )
+
+    def _build_param_source(self, value, defined_inputs, defined_steps):
+        """Convert a JSON-friendly value into a QgsProcessingModelChildParameterSource.
+
+        String prefixes:
+          @name          -> reference to model input parameter
+          $step.OUTPUT   -> reference to a previous step's output
+          =expression    -> evaluated QGIS expression
+        Lists are converted element-wise; everything else becomes a static value.
+        """
+        Src = QgsProcessingModelChildParameterSource
+
+        if isinstance(value, list):
+            return [self._build_param_source(v, defined_inputs, defined_steps)[0] for v in value]
+
+        if isinstance(value, str):
+            if value.startswith("@"):
+                ref = value[1:]
+                if ref not in defined_inputs:
+                    raise Exception(
+                        f"Parameter reference '{value}' points to undefined model input '{ref}'"
+                    )
+                return [Src.fromModelParameter(ref)]
+            if value.startswith("$"):
+                rest = value[1:]
+                if "." not in rest:
+                    raise Exception(
+                        f"Step output reference '{value}' must be in '$step_id.OUTPUT_NAME' form"
+                    )
+                child_id, output_name = rest.split(".", 1)
+                if child_id not in defined_steps:
+                    raise Exception(
+                        f"Step output reference '{value}' points to undefined step '{child_id}'"
+                    )
+                return [Src.fromChildOutput(child_id, output_name)]
+            if value.startswith("="):
+                return [Src.fromExpression(value[1:])]
+
+        return [Src.fromStaticValue(value)]
+
+    def _make_input_definition(self, spec):
+        """Build a QgsProcessingParameterDefinition from a JSON spec dict."""
+        type_name = (spec.get("type") or "string").lower()
+        name = spec["name"]
+        description = spec.get("description", name)
+        default = spec.get("default", None)
+        optional = bool(spec.get("optional", False))
+
+        if type_name in ("vector", "vector_layer"):
+            param = QgsProcessingParameterVectorLayer(name, description, defaultValue=default)
+        elif type_name in ("feature_source", "source"):
+            param = QgsProcessingParameterFeatureSource(name, description, defaultValue=default)
+        elif type_name in ("raster", "raster_layer"):
+            param = QgsProcessingParameterRasterLayer(name, description, defaultValue=default)
+        elif type_name == "field":
+            parent = spec.get("parent_layer")
+            if not parent:
+                raise Exception(f"Input '{name}' of type 'field' requires 'parent_layer'")
+            param = QgsProcessingParameterField(
+                name, description, parentLayerParameterName=parent, defaultValue=default
+            )
+        elif type_name in ("number", "int", "integer", "float", "double"):
+            param = QgsProcessingParameterNumber(name, description, defaultValue=default)
+            if type_name in ("int", "integer"):
+                with contextlib.suppress(AttributeError):
+                    param.setDataType(QgsProcessingParameterNumber.Integer)
+        elif type_name == "distance":
+            param = QgsProcessingParameterDistance(name, description, defaultValue=default)
+            parent = spec.get("parent_layer")
+            if parent:
+                param.setParentParameterName(parent)
+        elif type_name == "string":
+            param = QgsProcessingParameterString(name, description, defaultValue=default)
+        elif type_name in ("boolean", "bool"):
+            param = QgsProcessingParameterBoolean(
+                name, description, defaultValue=bool(default) if default is not None else False
+            )
+        elif type_name == "extent":
+            param = QgsProcessingParameterExtent(name, description, defaultValue=default)
+        elif type_name == "crs":
+            param = QgsProcessingParameterCrs(
+                name, description, defaultValue=default or "EPSG:4326"
+            )
+        elif type_name == "point":
+            param = QgsProcessingParameterPoint(name, description, defaultValue=default)
+        elif type_name == "file":
+            param = QgsProcessingParameterFile(name, description, defaultValue=default)
+        elif type_name == "folder":
+            param = QgsProcessingParameterFile(name, description, defaultValue=default)
+            try:
+                param.setBehavior(QgsProcessingParameterFile.Folder)
+            except AttributeError:
+                try:
+                    param.setBehavior(Qgis.ProcessingFileParameterBehavior.Folder)
+                except AttributeError:
+                    pass
+        elif type_name == "enum":
+            options = spec.get("options") or []
+            param = QgsProcessingParameterEnum(
+                name, description, options=options, defaultValue=default
+            )
+        elif type_name in ("multiple_layers", "layers"):
+            param = QgsProcessingParameterMultipleLayers(name, description, defaultValue=default)
+        else:
+            raise Exception(f"Unsupported input type '{type_name}' for input '{name}'")
+
+        if optional:
+            try:
+                param.setFlags(param.flags() | PROCESSING_OPTIONAL)
+            except Exception:
+                pass
+        return param
+
+    def create_processing_model(
+        self,
+        name,
+        steps,
+        inputs=None,
+        outputs=None,
+        path=None,
+        description="",
+        group="Models",
+        register=False,
+        overwrite=False,
+        **kwargs,
+    ):
+        """Build a Processing Model from a structured spec and save it to a .model3 file.
+
+        Reference syntax in step parameter values:
+          "@input_name"        – model input parameter
+          "$step_id.OUTPUT"    – output of a previous step
+          "=expression"        – QGIS expression
+          anything else        – static literal (numbers, bools, strings, lists, ...)
+        """
+        if not name or not isinstance(name, str):
+            raise Exception("Model 'name' is required")
+        if not isinstance(steps, list) or not steps:
+            raise Exception("'steps' must be a non-empty list")
+
+        registry = QgsApplication.processingRegistry()
+
+        # ---- Build model skeleton ----
+        model = QgsProcessingModelAlgorithm()
+        model.setName(name)
+        if group:
+            model.setGroup(group)
+        if description:
+            try:
+                model.setHelpContent({"ALG_DESC": description})
+            except Exception:
+                pass
+
+        # ---- Inputs ----
+        defined_inputs = set()
+        for idx, spec in enumerate(inputs or []):
+            if not isinstance(spec, dict) or "name" not in spec:
+                raise Exception(f"Input #{idx} must be a dict with at least 'name'")
+            param_def = self._make_input_definition(spec)
+            mp = QgsProcessingModelParameter(spec["name"])
+            mp.setPosition(QPointF(50.0, 50.0 + idx * 100.0))
+            model.addModelParameter(param_def, mp)
+            defined_inputs.add(spec["name"])
+
+        # ---- Steps ----
+        # Validate shape & resolve algorithm hints up front so we never write
+        # a half-built file. Each step entry is normalized to a fully-qualified
+        # algorithm id stored under '_resolved_algorithm'.
+        defined_steps: list[str] = []
+        resolved: list[tuple[dict, str]] = []  # (step_spec, resolved_alg_id)
+        seen_ids: set[str] = set()
+        for idx, step in enumerate(steps):
+            if not isinstance(step, dict):
+                raise Exception(f"Step #{idx} must be a dict")
+            for required in ("id", "algorithm"):
+                if required not in step:
+                    raise Exception(f"Step #{idx} missing required key '{required}'")
+            if step["id"] in seen_ids:
+                raise Exception(f"Duplicate step id '{step['id']}'")
+            seen_ids.add(step["id"])
+            try:
+                alg_id = self._resolve_algorithm_id(step["algorithm"], registry)
+            except Exception as e:
+                raise Exception(f"Step '{step['id']}': {e}") from e
+            alg = registry.algorithmById(alg_id)
+            valid_params = {p.name() for p in alg.parameterDefinitions()}
+            for pname in (step.get("parameters") or {}):
+                if pname not in valid_params:
+                    raise Exception(
+                        f"Step '{step['id']}' (algorithm '{alg_id}'): unknown parameter "
+                        f"'{pname}'. Valid parameters: {sorted(valid_params)}"
+                    )
+            resolved.append((step, alg_id))
+
+        # Outputs may be marked on a per-step basis; collect them by step id
+        outputs_by_step: dict[str, dict[str, dict]] = {}
+        step_id_to_alg: dict[str, str] = {step["id"]: alg_id for step, alg_id in resolved}
+        for out_idx, out_spec in enumerate(outputs or []):
+            if not isinstance(out_spec, dict):
+                raise Exception(f"Output #{out_idx} must be a dict")
+            for required in ("name", "from_step", "from_output"):
+                if required not in out_spec:
+                    raise Exception(f"Output #{out_idx} missing required key '{required}'")
+            from_step = out_spec["from_step"]
+            if from_step not in step_id_to_alg:
+                raise Exception(
+                    f"Output '{out_spec['name']}': from_step '{from_step}' is not a defined step"
+                )
+            from_alg = registry.algorithmById(step_id_to_alg[from_step])
+            valid_outputs = {o.name() for o in from_alg.outputDefinitions()}
+            if out_spec["from_output"] not in valid_outputs:
+                raise Exception(
+                    f"Output '{out_spec['name']}': '{out_spec['from_output']}' is not an output "
+                    f"of step '{from_step}' (algorithm '{step_id_to_alg[from_step]}'). "
+                    f"Valid outputs: {sorted(valid_outputs)}"
+                )
+            outputs_by_step.setdefault(from_step, {})[out_spec["name"]] = out_spec
+
+        for step_idx, (step, alg_id) in enumerate(resolved):
+            child = QgsProcessingModelChildAlgorithm(alg_id)
+            child.setChildId(step["id"])
+            child.setDescription(step.get("description") or registry.algorithmById(alg_id).displayName())
+            child.setPosition(QPointF(300.0 + step_idx * 250.0, 50.0))
+
+            for pname, pvalue in (step.get("parameters") or {}).items():
+                # Build sources, validating refs against already-defined inputs/steps.
+                sources = self._build_param_source(pvalue, defined_inputs, set(defined_steps))
+                child.addParameterSources(pname, sources)
+
+            # Final outputs declared for this step
+            step_outputs = outputs_by_step.get(step["id"], {})
+            if step_outputs:
+                model_outputs = {}
+                for out_name, out_spec in step_outputs.items():
+                    mo = QgsProcessingModelOutput(out_name)
+                    mo.setChildId(step["id"])
+                    mo.setChildOutputName(out_spec["from_output"])
+                    mo.setDescription(out_spec.get("description") or out_name)
+                    model_outputs[out_name] = mo
+                child.setModelOutputs(model_outputs)
+
+            model.addChildAlgorithm(child)
+            defined_steps.append(step["id"])
+
+        # If the user did not declare any outputs, expose the last step's OUTPUT
+        # under a default name so the model produces something the user can save.
+        if not outputs and defined_steps:
+            last_step_id = defined_steps[-1]
+            last_child = model.childAlgorithm(last_step_id)
+            last_alg = registry.algorithmById(last_child.algorithmId())
+            output_names = [o.name() for o in last_alg.outputDefinitions()] if last_alg else []
+            preferred = "OUTPUT" if "OUTPUT" in output_names else (output_names[0] if output_names else None)
+            if preferred:
+                mo = QgsProcessingModelOutput("Result")
+                mo.setChildId(last_step_id)
+                mo.setChildOutputName(preferred)
+                mo.setDescription("Result")
+                last_child.setModelOutputs({"Result": mo})
+
+        # ---- Resolve target path ----
+        models_dir = None
+        provider = registry.providerById("model")
+        if provider is not None and hasattr(provider, "modelsFolder"):
+            try:
+                models_dir = provider.modelsFolder()
+            except Exception:
+                models_dir = None
+        if models_dir is None:
+            models_dir = os.path.join(
+                QgsApplication.qgisSettingsDirPath(), "processing", "models"
+            )
+
+        if path:
+            target_path = os.path.expanduser(path)
+            if not target_path.endswith(".model3"):
+                target_path += ".model3"
+        elif register:
+            os.makedirs(models_dir, exist_ok=True)
+            target_path = os.path.join(models_dir, f"{name}.model3")
+        else:
+            raise Exception("Either 'path' must be provided or 'register' must be True")
+
+        if os.path.exists(target_path) and not overwrite:
+            raise Exception(
+                f"File already exists: {target_path}. Pass overwrite=True to replace it."
+            )
+
+        os.makedirs(os.path.dirname(target_path) or ".", exist_ok=True)
+        if not model.toFile(target_path):
+            raise Exception(f"Failed to write model to {target_path}")
+
+        # ---- Optional registration in the user's models folder ----
+        registered = False
+        registered_path = None
+        if register and provider is not None:
+            os.makedirs(models_dir, exist_ok=True)
+            registered_path = os.path.join(models_dir, f"{name}.model3")
+            if os.path.abspath(registered_path) != os.path.abspath(target_path):
+                import shutil
+
+                shutil.copyfile(target_path, registered_path)
+            try:
+                provider.refreshAlgorithms()
+                registered = True
+            except Exception as e:
+                QgsMessageLog.logMessage(
+                    f"Model saved but provider refresh failed: {e}", self.LOG_TAG, MSG_WARNING
+                )
+
+        QgsMessageLog.logMessage(
+            f"Processing model '{name}' saved to {target_path}", self.LOG_TAG, MSG_INFO
+        )
+        return {
+            "ok": True,
+            "name": name,
+            "path": target_path,
+            "registered": registered,
+            "registered_path": registered_path if registered else None,
+            "input_count": len(defined_inputs),
+            "step_count": len(defined_steps),
+            "output_count": sum(len(v) for v in outputs_by_step.values()) or (1 if defined_steps else 0),
+            # Echo the resolved algorithm ids so the caller can confirm fuzzy matches.
+            "resolved_steps": [
+                {"id": step["id"], "algorithm": alg_id, "hint": step["algorithm"]}
+                for step, alg_id in resolved
+            ],
         }
 
     def find_layer(self, name_pattern, **kwargs):

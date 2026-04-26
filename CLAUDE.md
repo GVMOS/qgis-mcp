@@ -57,7 +57,7 @@ uv run --no-sync pytest tests/ -v
 | `QGIS_MCP_LOG_LEVEL` | `INFO` | File log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 | `QGIS_MCP_TOOL_MODE` | `granular` | Tool registration mode: `granular` (51 tools) or `compound` (~19 grouped tools) |
 
-## MCP Tools (51 total)
+## MCP Tools (52 total)
 
 | Tool | Title | Annotations | Description |
 |---|---|---|---|
@@ -92,6 +92,7 @@ uv run --no-sync pytest tests/ -v
 | `execute_processing` | Execute Processing | — | Run QGIS Processing algorithm (60s, async+progress+logging) |
 | `list_processing_algorithms` | List Processing Algorithms | readOnly | Search algorithms by keyword/provider |
 | `get_algorithm_help` | Get Algorithm Help | readOnly | Algorithm parameters, outputs, description |
+| `create_processing_model` | Create Processing Model | — | Build a `.model3` workflow from a structured spec (inputs, steps, outputs); supports `@input` / `$step.OUTPUT` / `=expression` references |
 | `render_map` | Render Map | idempotent | Render canvas to inline image (60s, async+progress+logging) |
 | `execute_code` | Execute Code | destructive | Run arbitrary PyQGIS code (60s, async+progress+logging) |
 | `batch_commands` | Batch Commands | — | Multiple commands in one round-trip |
@@ -132,6 +133,7 @@ uv run --no-sync pytest tests/ -v
 | `analyze_layer` | Inspect schema, sample data, compute statistics |
 | `spatial_analysis` | Spatial operation between two layers with CRS check |
 | `style_map` | Create thematic map with symbology (now uses set_layer_style tool) |
+| `create_processing_model` | Translate a natural-language workflow description into a saved `.model3` Processing Model |
 
 ## MCP Protocol Features
 
