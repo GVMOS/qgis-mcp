@@ -8,6 +8,7 @@ import contextlib
 import json
 import logging
 import os
+import secrets
 import sys
 import time
 from collections.abc import AsyncIterator
@@ -198,9 +199,33 @@ def _send_sync(command_type: str, params: dict | None = None, timeout: int = TIM
     return result.get("result", {})
 
 
+def _get_error_hint(message: str) -> str | None:
+    """Return a helpful hint based on common QGIS/MCP error messages."""
+    msg = message.lower()
+    if "not found" in msg and "layer" in msg:
+        return "Try calling 'get_layers' to see all valid layer IDs."
+    if "field" in msg and "not found" in msg:
+        return "Check the layer schema using 'qgis://layers/{layer_id}/schema'."
+    if "crs" in msg or "projection" in msg:
+        return "Verify CRS strings (e.g., 'EPSG:4326') or use 'transform_coordinates'."
+    if "connection" in msg or "refused" in msg:
+        return "Ensure the QGIS MCP plugin is started (Plugins > QGIS MCP > Start Server)."
+    if "timeout" in msg:
+        return "The operation took too long. For large renders or processing, this is expected."
+    return None
+
+
 async def _send(command_type: str, params: dict | None = None, timeout: int = 30) -> dict:
     """Send a command via asyncio.to_thread to avoid blocking the event loop."""
-    return await asyncio.to_thread(_send_sync, command_type, params, timeout)
+    try:
+        return await asyncio.to_thread(_send_sync, command_type, params, timeout)
+    except Exception as exc:
+        message = str(exc)
+        hint = _get_error_hint(message)
+        if hint:
+            logger.warning(f"Error hint added for: {message}")
+            raise RuntimeError(f"{message}\n\nHINT: {hint}") from exc
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -268,6 +293,28 @@ mcp = FastMCP(
     "Use tools for actions, resources for read-only data, prompts for workflows.",
     lifespan=server_lifespan,
 )
+
+
+# ---------------------------------------------------------------------------
+# Resource Cache for large results
+# ---------------------------------------------------------------------------
+
+_resource_cache: dict[str, str] = {}
+
+
+def _cache_as_resource(data: Any, name_hint: str = "cache") -> str:
+    """Generate a random ID, store data as JSON, and return a URI."""
+    cache_id = secrets.token_hex(8)
+    _resource_cache[cache_id] = json.dumps(data)
+    return f"qgis://cache/{cache_id}"
+
+
+@mcp.resource("qgis://cache/{cache_id}", name="cached_resource", description="Cached large result")
+def cached_resource(cache_id: str) -> str:
+    """Register an MCP resource handler for cached data."""
+    if cache_id not in _resource_cache:
+        raise ValueError(f"Cache ID not found: {cache_id}")
+    return _resource_cache[cache_id]
 
 
 # ===========================================================================
@@ -486,7 +533,15 @@ async def get_layer_features(
     }
     if expression:
         params["expression"] = expression
-    return await _send("get_layer_features", params)
+    result = await _send("get_layer_features", params)
+
+    # Large Results to Resources (Task 9)
+    if limit > 20 and "features" in result:
+        uri = _cache_as_resource(result["features"], f"{layer_id}_features")
+        result["features_resource"] = uri
+        result["_hint"] = f"Result contains many features. You can also access them via {uri}"
+
+    return result
 
 
 @mcp.tool(
@@ -1286,6 +1341,124 @@ async def transform_coordinates(
     return await _send("transform_coordinates", params)
 
 
+@mcp.tool(
+    title="Add Web Layer",
+    description="Add a web layer (XYZ, WMS, WFS) to the project. service: 'xyz', 'wms', 'wfs'.",
+)
+async def add_web_layer(
+    ctx: Context, url: str, service: str, name: str | None = None, crs: str = "EPSG:3857"
+) -> list:
+    params = {"url": url, "service": service, "crs": crs}
+    if name:
+        params["name"] = name
+    result = await _send("add_web_layer", params)
+    return make_layer_response(result)
+
+
+@mcp.tool(
+    title="Add Table Join",
+    description="Add a table join to a vector layer.",
+)
+async def add_table_join(
+    ctx: Context,
+    target_layer_id: str,
+    join_layer_id: str,
+    target_field: str,
+    join_field: str,
+    prefix: str = "",
+) -> dict:
+    params = {
+        "target_layer_id": target_layer_id,
+        "join_layer_id": join_layer_id,
+        "target_field": target_field,
+        "join_field": join_field,
+        "prefix": prefix,
+    }
+    return await _send("add_table_join", params)
+
+
+@mcp.tool(
+    title="Add Field",
+    description="Add a new field to a vector layer. field_type: 'string', 'int', 'double', 'bool', 'date', 'datetime'.",
+)
+async def add_field(
+    ctx: Context,
+    layer_id: str,
+    field_name: str,
+    field_type: str,
+    length: int | None = None,
+    precision: int | None = None,
+) -> dict:
+    params = {
+        "layer_id": layer_id,
+        "field_name": field_name,
+        "field_type": field_type,
+    }
+    if length is not None:
+        params["length"] = length
+    if precision is not None:
+        params["precision"] = precision
+    return await _send("add_field", params)
+
+
+@mcp.tool(
+    title="Delete Field",
+    annotations=ToolAnnotations(destructiveHint=True),
+    description="Delete a field from a vector layer.",
+)
+async def delete_field(ctx: Context, layer_id: str, field_name: str) -> dict:
+    if not await _confirm_destructive(ctx, f"Delete field '{field_name}' from layer {layer_id}?"):
+        return {"ok": False, "message": "Cancelled by user"}
+    return await _send("delete_field", {"layer_id": layer_id, "field_name": field_name})
+
+
+@mcp.tool(
+    title="Rename Field",
+    description="Rename a field in a vector layer.",
+)
+async def rename_field(ctx: Context, layer_id: str, old_name: str, new_name: str) -> dict:
+    return await _send(
+        "rename_field", {"layer_id": layer_id, "old_name": old_name, "new_name": new_name}
+    )
+
+
+@mcp.tool(
+    title="Apply Style QML",
+    description="Apply a QGIS QML style file to a layer.",
+)
+async def apply_style_qml(ctx: Context, layer_id: str, path: str) -> dict:
+    return await _send("apply_style_qml", {"layer_id": layer_id, "path": path})
+
+
+@mcp.tool(
+    title="Save Style QML",
+    description="Save a layer's style to a QGIS QML file.",
+)
+async def save_style_qml(ctx: Context, layer_id: str, path: str) -> dict:
+    return await _send("save_style_qml", {"layer_id": layer_id, "path": path})
+
+
+@mcp.tool(
+    title="Create Layout",
+    description="Create a new print layout.",
+)
+async def create_layout(ctx: Context, name: str) -> dict:
+    return await _send("create_layout", {"name": name})
+
+
+@mcp.tool(
+    title="Add Layout Map",
+    description="Add a map item to a print layout at specified position and size (in millimeters).",
+)
+async def add_layout_map(
+    ctx: Context, layout_name: str, x: float, y: float, width: float, height: float
+) -> dict:
+    return await _send(
+        "add_layout_map",
+        {"layout_name": layout_name, "x": x, "y": y, "width": width, "height": height},
+    )
+
+
 # ---------------------------------------------------------------------------
 # Compound tool mode (opt-in via QGIS_MCP_TOOL_MODE=compound)
 # ---------------------------------------------------------------------------
@@ -1413,13 +1586,14 @@ QGIS MCP connects QGIS Desktop to LLMs via the Model Context Protocol.
 ## Tool Categories
 - **Info**: ping, diagnose, get_qgis_info, get_project_info
 - **Project**: load_project, create_new_project, save_project, set_project_crs
-- **Layers**: get_layers, add_vector_layer, add_raster_layer, remove_layer, find_layer, create_memory_layer
+- **Layers**: get_layers, add_vector_layer, add_raster_layer, add_web_layer, remove_layer, find_layer, create_memory_layer
 - **Active Layer**: get_active_layer, set_active_layer
 - **Visibility**: set_layer_visibility, zoom_to_layer
-- **Features**: get_layer_features (max 50, filter with expressions), get_field_statistics
+- **Features**: get_layer_features (max 50, filter with expressions), get_field_statistics, add_table_join
+- **Fields**: add_field, delete_field, rename_field
 - **Editing**: add_features, update_features, delete_features
 - **Selection**: select_features, get_selection, clear_selection
-- **Styling**: set_layer_style (single/categorized/graduated)
+- **Styling**: set_layer_style (single/categorized/graduated), apply_style_qml, save_style_qml
 - **Labeling**: get_layer_labeling, set_layer_labeling (field, font_size, color)
 - **Canvas**: get_canvas_extent, set_canvas_extent, get_canvas_screenshot, get_canvas_scale, set_canvas_scale
 - **Raster**: get_raster_info
@@ -1427,7 +1601,7 @@ QGIS MCP connects QGIS Desktop to LLMs via the Model Context Protocol.
 - **Rendering**: render_map (re-render to image), get_canvas_screenshot (fast grab)
 - **Code**: execute_code (arbitrary PyQGIS)
 - **Batch**: batch_commands (multiple commands in one round-trip)
-- **Layouts**: list_layouts, export_layout
+- **Layouts**: list_layouts, export_layout, create_layout, add_layout_map
 - **Logging**: get_message_log
 - **Plugins**: list_plugins, get_plugin_info, reload_plugin
 - **Layer Tree**: get_layer_tree, create_layer_group, move_layer_to_group
@@ -1481,16 +1655,18 @@ then `add_vector_layer` to load it as a background for spatial context.
 
 @mcp.prompt(
     name="analyze_layer",
-    description="Inspect a layer's schema, sample data, and compute field statistics",
+    description="Deeply inspect a layer's schema, sample data, and compute detailed field statistics",
 )
 def analyze_layer_prompt(layer_id: str) -> list[UserMessage]:
     return [
         UserMessage(
-            content=f"Analyze the layer with ID '{layer_id}':\n"
-            f"1. Read resource qgis://layers/{layer_id}/schema to understand fields\n"
-            f"2. Read resource qgis://layers/{layer_id}/features to see sample data\n"
-            f"3. For each numeric field, call get_field_statistics to compute stats\n"
-            f"4. Summarize the layer: geometry type, field types, data distribution, any issues"
+            content=f"Perform a comprehensive analysis of the layer with ID '{layer_id}':\n"
+            f"1. Read resource qgis://layers/{layer_id}/info for general metadata (CRS, extent, count)\n"
+            f"2. Read resource qgis://layers/{layer_id}/schema to understand field types and constraints\n"
+            f"3. Read resource qgis://layers/{layer_id}/features to inspect representative sample data\n"
+            f"4. For each numeric field, call get_field_statistics to understand the data distribution (min, max, mean, etc.)\n"
+            f"5. For categorical fields, identify unique values and their prevalence\n"
+            f"6. Provide a detailed summary including: geometry validity, projection suitability, data quality, and potential analysis use cases"
         )
     ]
 

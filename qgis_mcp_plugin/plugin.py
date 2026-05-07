@@ -4,12 +4,15 @@ import fnmatch
 import io
 import json
 import os
+import shutil
 import socket
 import struct
+import subprocess
 import sys
 import traceback
 from collections import deque
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import ClassVar
 
 from qgis.core import (
@@ -24,11 +27,15 @@ from qgis.core import (
     QgsExpressionContextUtils,
     QgsFeature,
     QgsFeatureRequest,
+    QgsField,
     QgsGeometry,
     QgsGraduatedSymbolRenderer,
     QgsLayerTreeGroup,
     QgsLayerTreeLayer,
     QgsLayoutExporter,
+    QgsLayoutItemMap,
+    QgsLayoutPoint,
+    QgsLayoutSize,
     QgsMapRendererParallelJob,
     QgsMapSettings,
     QgsMessageLog,
@@ -52,6 +59,7 @@ from qgis.core import (
     QgsProcessingParameterRasterLayer,
     QgsProcessingParameterString,
     QgsProcessingParameterVectorLayer,
+    QgsPrintLayout,
     QgsProject,
     QgsRasterLayer,
     QgsRectangle,
@@ -61,27 +69,25 @@ from qgis.core import (
     QgsStyle,
     QgsSymbol,
     QgsVectorLayer,
+    QgsVectorLayerJoinInfo,
     QgsWkbTypes,
 )
-from qgis.PyQt.QtCore import (
-    QBuffer,
-    QByteArray,
-    QObject,
-    QPointF,
-    QSize,
-    QTimer,
-    QUrl,
-    QVariant,
-)
+from qgis.PyQt.QtCore import QBuffer, QByteArray, QObject, QProcess, QSize, QTimer, QUrl, QVariant
 from qgis.PyQt.QtGui import QColor, QDesktopServices, QIcon
 from qgis.PyQt.QtWidgets import (
     QAction,
     QCheckBox,
+    QComboBox,
     QDialog,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMenu,
+    QPlainTextEdit,
+    QPushButton,
     QSpinBox,
+    QTabWidget,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -352,6 +358,16 @@ class QgisMCPServer(QObject):
                 "remove_map_theme": self.remove_map_theme,
                 "apply_map_theme": self.apply_map_theme,
                 "set_project_crs": self.set_project_crs,
+                # Phase 6 — Extended capabilities
+                "add_web_layer": self.add_web_layer,
+                "add_table_join": self.add_table_join,
+                "add_field": self.add_field,
+                "delete_field": self.delete_field,
+                "rename_field": self.rename_field,
+                "apply_style_qml": self.apply_style_qml,
+                "save_style_qml": self.save_style_qml,
+                "create_layout": self.create_layout,
+                "add_layout_map": self.add_layout_map,
             }
 
             handler = handlers.get(cmd_type)
@@ -2188,6 +2204,554 @@ class QgisMCPServer(QObject):
         QgsProject.instance().setCrs(new_crs)
         return {"ok": True, "crs": new_crs.authid(), "description": new_crs.description()}
 
+    # -----------------------------------------------------------------------
+    # Phase 6 — Extended capabilities
+    # -----------------------------------------------------------------------
+
+    def add_web_layer(self, url, service, name=None, crs="EPSG:3857", **kwargs):
+        """Add a web layer (XYZ, WMS, WFS) to the project."""
+        service = service.lower()
+        if service == "xyz":
+            uri = f"type=xyz&url={url}"
+            layer = QgsRasterLayer(uri, name or "XYZ Layer", "wms")
+        elif service == "wms":
+            layer = QgsRasterLayer(url, name or "WMS Layer", "wms")
+        elif service == "wfs":
+            layer = QgsVectorLayer(url, name or "WFS Layer", "WFS")
+        else:
+            raise Exception(f"Unsupported web service: {service}. Use 'xyz', 'wms', or 'wfs'")
+
+        if not layer.isValid():
+            raise Exception(f"Layer is not valid: {url}")
+
+        QgsProject.instance().addMapLayer(layer)
+        return {"id": layer.id(), "name": layer.name(), "type": self._get_layer_type(layer)}
+
+    def add_table_join(
+        self, target_layer_id, join_layer_id, target_field, join_field, prefix="", **kwargs
+    ):
+        """Add a table join to a vector layer."""
+        target_layer = self._get_vector_layer(target_layer_id)
+        join_layer = self._get_vector_layer(join_layer_id)
+
+        join_info = QgsVectorLayerJoinInfo()
+        join_info.setTargetFieldName(target_field)
+        join_info.setJoinLayerId(join_layer.id())
+        join_info.setJoinFieldName(join_field)
+        join_info.setUsingMemoryCache(True)
+        if prefix:
+            join_info.setPrefix(prefix)
+
+        if target_layer.addJoin(join_info):
+            return {"ok": True}
+        else:
+            raise Exception("Failed to add table join")
+
+    def add_field(self, layer_id, field_name, field_type, length=None, precision=None, **kwargs):
+        """Add a field to a vector layer."""
+        layer = self._get_vector_layer(layer_id)
+
+        type_map = {
+            "string": QVariant.String,
+            "int": QVariant.Int,
+            "double": QVariant.Double,
+            "bool": QVariant.Bool,
+            "date": QVariant.Date,
+            "datetime": QVariant.DateTime,
+        }
+        v_type = type_map.get(field_type.lower(), QVariant.String)
+        field = QgsField(field_name, v_type, field_type, length or 0, precision or 0)
+
+        if layer.dataProvider().addAttributes([field]):
+            layer.updateFields()
+            return {"ok": True, "field_name": field_name}
+        else:
+            raise Exception(f"Failed to add field: {field_name}")
+
+    def delete_field(self, layer_id, field_name, **kwargs):
+        """Delete a field from a vector layer."""
+        layer = self._get_vector_layer(layer_id)
+        idx = layer.fields().indexOf(field_name)
+        if idx < 0:
+            raise Exception(f"Field not found: {field_name}")
+
+        if layer.dataProvider().deleteAttributes([idx]):
+            layer.updateFields()
+            return {"ok": True, "field_name": field_name}
+        else:
+            raise Exception(f"Failed to delete field: {field_name}")
+
+    def rename_field(self, layer_id, old_name, new_name, **kwargs):
+        """Rename a field in a vector layer."""
+        layer = self._get_vector_layer(layer_id)
+        idx = layer.fields().indexOf(old_name)
+        if idx < 0:
+            raise Exception(f"Field not found: {old_name}")
+
+        if layer.dataProvider().renameAttributes({idx: new_name}):
+            layer.updateFields()
+            return {"ok": True, "old_name": old_name, "new_name": new_name}
+        else:
+            raise Exception(f"Failed to rename field: {old_name}")
+
+    def apply_style_qml(self, layer_id, path, **kwargs):
+        """Apply a QML style to a layer."""
+        project = QgsProject.instance()
+        layer = project.mapLayer(layer_id)
+        if not layer:
+            raise Exception(f"Layer not found: {layer_id}")
+
+        message, success = layer.loadNamedStyle(path)
+        if success:
+            layer.triggerRepaint()
+            self.iface.layerTreeView().refreshLayerSymbology(layer.id())
+            return {"ok": True, "message": message}
+        else:
+            raise Exception(f"Failed to apply style: {message}")
+
+    def save_style_qml(self, layer_id, path, **kwargs):
+        """Save a layer's style to a QML file."""
+        project = QgsProject.instance()
+        layer = project.mapLayer(layer_id)
+        if not layer:
+            raise Exception(f"Layer not found: {layer_id}")
+
+        message, success = layer.saveNamedStyle(path)
+        if success:
+            return {"ok": True, "path": path}
+        else:
+            raise Exception(f"Failed to save style: {message}")
+
+    def create_layout(self, name, **kwargs):
+        """Create a new print layout."""
+        project = QgsProject.instance()
+        layout = QgsPrintLayout(project)
+        layout.initializeDefaults()
+        layout.setName(name)
+        project.layoutManager().addLayout(layout)
+        return {"ok": True, "name": name}
+
+    def add_layout_map(self, layout_name, x, y, width, height, **kwargs):
+        """Add a map item to a print layout."""
+        manager = QgsProject.instance().layoutManager()
+        layout = manager.layoutByName(layout_name)
+        if not layout:
+            raise Exception(f"Layout not found: {layout_name}")
+
+        map_item = QgsLayoutItemMap(layout)
+        map_item.attemptMove(QgsLayoutPoint(x, y))
+        map_item.attemptResize(QgsLayoutSize(width, height))
+        map_item.zoomToExtent(self.iface.mapCanvas().extent())
+        layout.addLayoutItem(map_item)
+        return {"ok": True}
+
+
+class MCPConfiguratorDialog(QDialog):
+    def __init__(self, iface, parent=None):
+        super().__init__(parent)
+        self.iface = iface
+        self.setWindowTitle("QGIS MCP — Setup & Configurator")
+        self.setMinimumSize(600, 500)
+
+        self.repo_dir = Path(__file__).resolve().parent.parent
+        self.github_url = "git+https://github.com/nkarasiak/qgis-mcp.git"
+        self.setup_process = None
+
+        self.init_ui()
+        self.refresh_status()
+        self.refresh_checklist()
+
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        self.tabs = QTabWidget()
+
+        # Tab 1: Guide
+        self.guide_tab = QWidget()
+        self.init_guide_tab()
+        self.tabs.addTab(self.guide_tab, "Guide")
+
+        # Tab 2: Auto-Config
+        self.config_tab = QWidget()
+        self.init_config_tab()
+        self.tabs.addTab(self.config_tab, "Auto-Config")
+
+        layout.addWidget(self.tabs)
+
+        # Bottom Buttons
+        btn_layout = QHBoxLayout()
+        self.github_btn = QPushButton("Open GitHub")
+        self.github_btn.clicked.connect(
+            lambda: QDesktopServices.openUrl(QUrl("https://github.com/nkarasiak/qgis-mcp"))
+        )
+        btn_layout.addWidget(self.github_btn)
+        btn_layout.addStretch()
+        self.close_btn = QPushButton("Close")
+        self.close_btn.clicked.connect(self.accept)
+        btn_layout.addWidget(self.close_btn)
+        layout.addLayout(btn_layout)
+
+    def init_guide_tab(self):
+        layout = QVBoxLayout(self.guide_tab)
+        text = (
+            "<h2>QGIS MCP Setup Guide</h2>"
+            "<p>This plugin enables QGIS to be controlled by LLMs via the Model Context Protocol (MCP).</p>"
+            "<ol>"
+            "<li><b>Start the Server:</b> Click the MCP icon in the toolbar to start the TCP server inside QGIS.</li>"
+            "<li><b>Configure Client:</b> Use the 'Auto-Config' tab to add QGIS to your favorite LLM client.</li>"
+            "<li><b>Dependencies:</b> Ensure <code>uv</code> is installed on your system for best experience.</li>"
+            "</ol>"
+        )
+        self.guide_label = QLabel(text)
+        self.guide_label.setWordWrap(True)
+        self.guide_label.setOpenExternalLinks(True)
+        layout.addWidget(self.guide_label)
+
+        # Health Checklist Group
+        self.checklist_group = QGroupBox("Health Checklist")
+        checklist_layout = QVBoxLayout()
+
+        self.status_link = QLabel("Plugin Link Status: Checking...")
+        self.status_uv = QLabel("uv Installation: Checking...")
+        self.status_venv = QLabel("Python Venv Ready: Checking...")
+        self.status_entry = QLabel("MCP Server Entry Point: Checking...")
+
+        checklist_layout.addWidget(self.status_link)
+        checklist_layout.addWidget(self.status_uv)
+        checklist_layout.addWidget(self.status_venv)
+        checklist_layout.addWidget(self.status_entry)
+
+        # Checklist Buttons
+        check_btn_layout = QHBoxLayout()
+        self.refresh_check_btn = QPushButton("Refresh Checklist")
+        self.refresh_check_btn.clicked.connect(self.refresh_checklist)
+        check_btn_layout.addWidget(self.refresh_check_btn)
+
+        self.setup_env_btn = QPushButton("Setup Environment")
+        self.setup_env_btn.clicked.connect(self.setup_environment)
+        self.setup_env_btn.setToolTip("Run 'uv sync' or 'pip install -e .' in the repository")
+        check_btn_layout.addWidget(self.setup_env_btn)
+
+        checklist_layout.addLayout(check_btn_layout)
+        self.checklist_group.setLayout(checklist_layout)
+        layout.addWidget(self.checklist_group)
+
+        self.relink_btn = QPushButton("Ensure Plugin is Linked (Symlink)")
+        self.relink_btn.clicked.connect(self.relink_plugin)
+        layout.addWidget(self.relink_btn)
+
+        layout.addStretch()
+
+    def _get_qgis_plugins_dir(self):
+        """Get the plugins directory for the currently active QGIS profile."""
+        return Path(QgsApplication.qgisSettingsDirPath()) / "python" / "plugins"
+
+    def relink_plugin(self):
+        plugins_dir = self._get_qgis_plugins_dir()
+        target = plugins_dir / "qgis_mcp_plugin"
+        plugin_src = self.repo_dir / "qgis_mcp_plugin"
+
+        try:
+            if target.exists() or target.is_symlink():
+                if target.is_symlink() and target.resolve() == plugin_src.resolve():
+                    QgsMessageLog.logMessage("Plugin already correctly linked.", "MCP", MSG_INFO)
+                    self.refresh_checklist()
+                    return
+                if target.is_symlink() or target.is_file():
+                    target.unlink()
+                else:
+                    shutil.rmtree(target)
+
+            plugins_dir.mkdir(parents=True, exist_ok=True)
+            if sys.platform == "win32":
+                try:
+                    target.symlink_to(plugin_src, target_is_directory=True)
+                except OSError:
+                    subprocess.run(
+                        f'mklink /J "{target}" "{plugin_src}"', shell=True, check=True
+                    )
+            else:
+                target.symlink_to(plugin_src)
+            QgsMessageLog.logMessage(f"Linked plugin: {target} -> {plugin_src}", "MCP", MSG_INFO)
+            self.refresh_checklist()
+        except Exception as e:
+            QgsMessageLog.logMessage(f"Failed to link plugin: {e}", "MCP", MSG_CRITICAL)
+
+    def refresh_checklist(self):
+        """Update the health checklist labels."""
+        # 1. Plugin Link Status
+        plugins_dir = self._get_qgis_plugins_dir()
+        target = plugins_dir / "qgis_mcp_plugin"
+        is_linked = target.is_symlink() and target.resolve() == (self.repo_dir / "qgis_mcp_plugin").resolve()
+        
+        self.status_link.setText(f"Plugin Link Status: {'✅ (linked)' if is_linked else '❌ (not linked)'}")
+        self.status_link.setStyleSheet(f"color: {'green' if is_linked else 'red'};")
+
+        # 2. uv Installation
+        has_uv = bool(shutil.which("uv"))
+        self.status_uv.setText(f"uv Installation: {'✅ (found)' if has_uv else '❌ (missing)'}")
+        self.status_uv.setStyleSheet(f"color: {'green' if has_uv else 'red'};")
+
+        # 3. Python Venv Ready
+        has_venv = (self.repo_dir / ".venv").exists()
+        self.status_venv.setText(f"Python Venv Ready: {'✅ (ready)' if has_venv else '❌ (missing)'}")
+        self.status_venv.setStyleSheet(f"color: {'green' if has_venv else 'red'};")
+
+        # 4. MCP Server Entry Point
+        has_entry = (self.repo_dir / "src" / "qgis_mcp" / "server.py").exists()
+        self.status_entry.setText(f"MCP Server Entry Point: {'✅ (exists)' if has_entry else '❌ (missing)'}")
+        self.status_entry.setStyleSheet(f"color: {'green' if has_entry else 'red'};")
+
+    def setup_environment(self):
+        """Run environment setup in background."""
+        if self.setup_process and self.setup_process.state() == QProcess.Running:
+            return
+
+        has_uv = bool(shutil.which("uv"))
+        cmd = "uv" if has_uv else "pip"
+        args = ["sync"] if has_uv else ["install", "-e", "."]
+
+        self.setup_env_btn.setEnabled(False)
+        self.setup_env_btn.setText("Setting up...")
+        
+        self.setup_process = QProcess()
+        self.setup_process.setWorkingDirectory(str(self.repo_dir))
+        self.setup_process.readyReadStandardOutput.connect(self._on_setup_output)
+        self.setup_process.readyReadStandardError.connect(self._on_setup_output)
+        self.setup_process.finished.connect(self._on_setup_finished)
+
+        QgsMessageLog.logMessage(f"Starting environment setup: {cmd} {' '.join(args)}", "MCP", MSG_INFO)
+        self.setup_process.start(cmd, args)
+
+    def _on_setup_output(self):
+        data = self.setup_process.readAllStandardOutput().data().decode().strip()
+        if not data:
+            data = self.setup_process.readAllStandardError().data().decode().strip()
+        if data:
+            for line in data.splitlines():
+                QgsMessageLog.logMessage(f"[Setup] {line}", "MCP", MSG_INFO)
+
+    def _on_setup_finished(self, exit_code, exit_status):
+        self.setup_env_btn.setEnabled(True)
+        self.setup_env_btn.setText("Setup Environment")
+        
+        if exit_code == 0:
+            QgsMessageLog.logMessage("Environment setup finished successfully.", "MCP", MSG_INFO)
+        else:
+            QgsMessageLog.logMessage(f"Environment setup failed (exit code {exit_code}).", "MCP", MSG_CRITICAL)
+        
+        self.refresh_checklist()
+        self.setup_process = None
+
+    def init_config_tab(self):
+        layout = QVBoxLayout(self.config_tab)
+
+        # Client selection
+        client_layout = QHBoxLayout()
+        client_layout.addWidget(QLabel("MCP Client:"))
+        self.client_combo = QComboBox()
+        self.client_combo.addItems(
+            ["claude-desktop", "cursor", "vscode", "windsurf", "zed", "claude-code"]
+        )
+        self.client_combo.currentTextChanged.connect(self.update_preview)
+        client_layout.addWidget(self.client_combo)
+        layout.addLayout(client_layout)
+
+        # Mode selection
+        mode_layout = QHBoxLayout()
+        mode_layout.addWidget(QLabel("Mode:"))
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItems(["Local (uv run)", "Remote (uvx)"])
+        self.mode_combo.currentTextChanged.connect(self.update_preview)
+        mode_layout.addWidget(self.mode_combo)
+        layout.addLayout(mode_layout)
+
+        # Status Label
+        self.status_label = QLabel("Status: Unknown")
+        self.status_label.setStyleSheet("font-weight: bold;")
+        layout.addWidget(self.status_label)
+
+        # Preview
+        layout.addWidget(QLabel("Config Preview:"))
+        self.preview_edit = QPlainTextEdit()
+        self.preview_edit.setReadOnly(True)
+        # Use a fixed-width font for JSON
+        layout.addWidget(self.preview_edit)
+
+        # Buttons
+        h_btn_layout = QHBoxLayout()
+        self.refresh_btn = QPushButton("Refresh Status")
+        self.refresh_btn.clicked.connect(self.refresh_status)
+        h_btn_layout.addWidget(self.refresh_btn)
+
+        self.config_btn = QPushButton("Configure")
+        self.config_btn.clicked.connect(self.run_config)
+        self.config_btn.setStyleSheet(
+            "background-color: #4CAF50; color: white; font-weight: bold;"
+        )
+        h_btn_layout.addWidget(self.config_btn)
+        layout.addLayout(h_btn_layout)
+
+    def _get_client_info(self, client_name):
+        home = Path.home()
+        appdata = (
+            Path(os.environ.get("APPDATA", home / "AppData" / "Roaming"))
+            if sys.platform == "win32"
+            else None
+        )
+
+        if sys.platform == "darwin":
+            claude_cfg = (
+                home / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
+            )
+        elif sys.platform == "win32":
+            claude_cfg = appdata / "Claude" / "claude_desktop_config.json"
+        else:
+            claude_cfg = home / ".config" / "Claude" / "claude_desktop_config.json"
+
+        cursor_cfg = home / ".cursor" / "mcp.json"
+        windsurf_cfg = home / ".windsurf" / "mcp.json"
+        vscode_cfg = self.repo_dir / ".vscode" / "mcp.json"
+
+        if sys.platform == "darwin":
+            zed_cfg = home / ".config" / "zed" / "settings.json"
+        elif sys.platform == "win32":
+            zed_cfg = appdata / "Zed" / "settings.json"
+        else:
+            zed_cfg = home / ".config" / "zed" / "settings.json"
+
+        registry = {
+            "claude-desktop": {"path": claude_cfg, "key": "mcpServers"},
+            "cursor": {"path": cursor_cfg, "key": "mcpServers"},
+            "vscode": {"path": vscode_cfg, "key": "mcpServers", "project_local": True},
+            "windsurf": {"path": windsurf_cfg, "key": "mcpServers"},
+            "zed": {"path": zed_cfg, "key": "context_servers"},
+            "claude-code": {"print_only": True},
+        }
+        return registry.get(client_name)
+
+    def _get_server_entry(self, client, remote):
+        if remote:
+            entry = {
+                "command": "uvx",
+                "args": ["--from", self.github_url, "qgis-mcp-server"],
+            }
+        else:
+            if shutil.which("uv"):
+                entry = {
+                    "command": "uv",
+                    "args": ["run", "--no-sync", "src/qgis_mcp/server.py"],
+                    "cwd": str(self.repo_dir),
+                }
+            else:
+                if sys.platform == "win32":
+                    python = self.repo_dir / ".venv" / "Scripts" / "python.exe"
+                else:
+                    python = self.repo_dir / ".venv" / "bin" / "python"
+                entry = {
+                    "command": str(python),
+                    "args": [str(self.repo_dir / "src" / "qgis_mcp" / "server.py")],
+                }
+
+        if client == "zed":
+            return {
+                "command": {
+                    "path": entry["command"],
+                    "args": entry["args"],
+                    "env": {"QGIS_MCP_TRANSPORT": "stdio"},
+                },
+                "settings": {},
+            }
+        return entry
+
+    def update_preview(self):
+        client = self.client_combo.currentText()
+        remote = self.mode_combo.currentText() == "Remote (uvx)"
+        info = self._get_client_info(client)
+
+        if info.get("print_only"):
+            if remote:
+                cmd = f'claude mcp add qgis -- uvx --from "{self.github_url}" qgis-mcp-server'
+            elif shutil.which("uv"):
+                cmd = f'cd "{self.repo_dir}" && claude mcp add qgis -- uv run --no-sync src/qgis_mcp/server.py'
+            else:
+                py = (
+                    "Scripts\\python.exe" if sys.platform == "win32" else "bin/python"
+                )
+                python = self.repo_dir / ".venv" / py
+                server = self.repo_dir / "src/qgis_mcp/server.py"
+                cmd = f'claude mcp add qgis -- "{python}" "{server}"'
+            self.preview_edit.setPlainText(f"Run this command in your terminal:\n\n{cmd}")
+            return
+
+        entry = self._get_server_entry(client, remote)
+        self.preview_edit.setPlainText(json.dumps({"qgis": entry}, indent=2))
+
+    def refresh_status(self):
+        client = self.client_combo.currentText()
+        info = self._get_client_info(client)
+
+        if info.get("print_only"):
+            self.status_label.setText("Status: N/A (Manual command)")
+            self.status_label.setStyleSheet("color: gray;")
+            self.update_preview()
+            return
+
+        path = info["path"]
+        key = info["key"]
+
+        if path.exists():
+            try:
+                with open(path, encoding="utf-8") as f:
+                    data = json.load(f)
+                if key in data and "qgis" in data[key]:
+                    self.status_label.setText(f"Status: Configured in {path.name}")
+                    self.status_label.setStyleSheet("color: green;")
+                else:
+                    self.status_label.setText(f"Status: Not configured in {path.name}")
+                    self.status_label.setStyleSheet("color: orange;")
+            except Exception as e:
+                self.status_label.setText(f"Status: Error reading config: {e}")
+                self.status_label.setStyleSheet("color: red;")
+        else:
+            self.status_label.setText(f"Status: Config file not found ({path.name})")
+            self.status_label.setStyleSheet("color: gray;")
+
+        self.update_preview()
+
+    def run_config(self):
+        client = self.client_combo.currentText()
+        remote = self.mode_combo.currentText() == "Remote (uvx)"
+        info = self._get_client_info(client)
+
+        if info.get("print_only"):
+            return
+
+        path = info["path"]
+        key = info["key"]
+        entry = self._get_server_entry(client, remote)
+
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if path.exists():
+                with open(path, encoding="utf-8") as f:
+                    data = json.load(f)
+            else:
+                data = {}
+
+            data.setdefault(key, {})
+            data[key]["qgis"] = entry
+
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+                f.write("\n")
+
+            self.refresh_status()
+            QgsMessageLog.logMessage(f"Configured {client} at {path}", "MCP", MSG_INFO)
+        except Exception as e:
+            QgsMessageLog.logMessage(f"Failed to configure {client}: {e}", "MCP", MSG_CRITICAL)
+            self.status_label.setText(f"Status: Failed to write: {e}")
+            self.status_label.setStyleSheet("color: red;")
+
 
 class QgisMCPPlugin:
     """Main plugin class for QGIS MCP"""
@@ -2263,7 +2827,7 @@ class QgisMCPPlugin:
         self.tool_button.setToolButtonStyle(TOOLBUTTON_ICON_ONLY)
         self._toolbar_action = toolbar.addWidget(self.tool_button)
 
-        self.help_action = QAction("Help / Install MCP Server", self.iface.mainWindow())
+        self.help_action = QAction("MCP Setup & Configurator", self.iface.mainWindow())
         self.help_action.triggered.connect(self._show_help)
 
         self.iface.addPluginToMenu("QGIS MCP", self.action)
@@ -2277,6 +2841,35 @@ class QgisMCPPlugin:
         if self.autostart_cb.isChecked():
             self.action.setChecked(True)
             self.toggle_server(True)
+
+        # Proactive Welcome / Setup check
+        QTimer.singleShot(1000, self._proactive_setup_check)
+
+    def _proactive_setup_check(self):
+        """Check if setup is needed and show a welcome message."""
+        settings = QgsSettings()
+        first_run = settings.value(f"{self.SETTINGS_PREFIX}/first_run", True, type=bool)
+        
+        # Check link status
+        repo_dir = Path(__file__).resolve().parent.parent
+        plugins_dir = Path(QgsApplication.qgisSettingsDirPath()) / "python" / "plugins"
+        target = plugins_dir / "qgis_mcp_plugin"
+        is_linked = target.is_symlink() and target.resolve() == (repo_dir / "qgis_mcp_plugin").resolve()
+
+        if first_run or not is_linked:
+            msg = "Welcome to QGIS MCP! It looks like you might need to complete the setup."
+            if not is_linked:
+                msg = "QGIS MCP plugin is not linked to your repository. Some features might not work."
+            
+            self.iface.messageBar().pushMessage(
+                "QGIS MCP",
+                f"{msg} Open the 'MCP Setup & Configurator' to get started.",
+                level=Qgis.Info,
+                duration=10
+            )
+            
+            if first_run:
+                settings.setValue(f"{self.SETTINGS_PREFIX}/first_run", False)
 
     def _save_autostart(self, checked):
         """Persist auto-start preference."""
@@ -2292,38 +2885,8 @@ class QgisMCPPlugin:
         return QIcon(icon_path)
 
     def _show_help(self):
-        """Show help dialog with MCP server installation instructions."""
-        dlg = QDialog(self.iface.mainWindow())
-        dlg.setWindowTitle("QGIS MCP — Setup Guide")
-        dlg.setMinimumWidth(520)
-
-        layout = QVBoxLayout()
-        label = QLabel(
-            "<p>This plugin is only one half of the setup. You also need an "
-            "<b>MCP server</b> so that Claude (or another LLM) can talk to QGIS.</p>"
-            "<p><b>Quick setup:</b> Run <code>python install.py</code> from the "
-            "repository root to configure your MCP client(s) automatically.</p>"
-            "<p>Full instructions are on the "
-            f'<a href="{self.REPO_URL}#installation">GitHub repository</a>.</p>'
-        )
-        label.setWordWrap(True)
-        label.setOpenExternalLinks(True)
-        layout.addWidget(label)
-
-        btn_layout = QHBoxLayout()
-        github_btn = QToolButton()
-        github_btn.setText("Open GitHub")
-        github_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(self.REPO_URL)))
-        btn_layout.addWidget(github_btn)
-        btn_layout.addStretch()
-        ok_btn = QToolButton()
-        ok_btn.setText("OK")
-        ok_btn.setMinimumWidth(80)
-        ok_btn.clicked.connect(dlg.accept)
-        btn_layout.addWidget(ok_btn)
-        layout.addLayout(btn_layout)
-
-        dlg.setLayout(layout)
+        """Show the MCP Setup & Configurator dialog."""
+        dlg = MCPConfiguratorDialog(self.iface, self.iface.mainWindow())
         dlg.exec()
 
     def toggle_server(self, checked):
