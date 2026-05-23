@@ -1566,9 +1566,10 @@ QGIS MCP connects QGIS Desktop to LLMs via the Model Context Protocol.
 - **Map Themes**: get_map_themes, add_map_theme, remove_map_theme, apply_map_theme
 
 ## Tips
-- **World basemap**: QGIS ships with a world map. Use `execute_code` with \
-`QgsApplication.pkgDataPath() + "/resources/data/world_map.gpkg"` to get the path, \
-then `add_vector_layer` to load it as a background for spatial context.
+- **World basemap**: QGIS ships with a built-in world map. In the QGIS UI, \
+type "world" in the locator bar (bottom of screen) to find and open it. Via MCP: \
+use `execute_code` to resolve `QgsApplication.pkgDataPath() + "/resources/data/world_map.gpkg"`, \
+then pass that path to `add_vector_layer` to load it as a background for spatial context.
 - **Map themes**: save/restore layer visibility presets — useful for toggling between views.
 - **Bookmarks**: save named extents for quick navigation to areas of interest.
 

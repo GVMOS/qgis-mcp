@@ -128,9 +128,8 @@ Add to your client's MCP config file:
 You have access to QGIS tools. Do the following:
 1. Ping to check the connection
 2. Create a new project and save it at "/tmp/my_project.qgz"
-3. Load the vector layer "/data/cities.shp" and name it "Cities"
-4. Get field statistics for the "population" field
-5. Create a graduated symbology on the "population" field with 5 classes
+3. Load the vector layer "world_map.gpkg" available in Qgis ("resources/data/world_map.gpkg")
+4. Filter "USA" from the field "adm0_a3"
 6. Render the map and show me the result
 7. Save the project
 ```
