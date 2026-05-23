@@ -2,7 +2,7 @@
 
 Connect [QGIS](https://qgis.org/) to [Claude AI](https://claude.ai/) through the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/), enabling Claude to directly control QGIS — manage layers, edit features, run processing algorithms, render maps, and more.
 
-51 MCP tools covering layer management, feature editing, processing, rendering, styling, plugin development, and system management. Compatible with QGIS 3.28–4.x. Includes a one-command installer for Claude Desktop, Claude Code, Codex CLI, Cursor, VS Code Copilot, Windsurf, and Zed.
+51 MCP tools covering layer management, feature editing, processing, rendering, styling, plugin development, and system management. Compatible with QGIS 3.28–4.x. Works with Claude Code, Codex CLI, Gemini CLI, opencode, Claude Desktop, Cursor, VS Code, Windsurf, Zed, and more.
 
 ## Architecture
 
@@ -13,70 +13,21 @@ Claude ←→ MCP Server (FastMCP) ←→ TCP socket ←→ QGIS Plugin (QTimer)
 1. **QGIS Plugin** (`qgis_mcp_plugin/`) — Runs inside QGIS. Non-blocking TCP socket server that processes JSON commands within QGIS's event loop.
 2. **MCP Server** (`src/qgis_mcp/server.py`) — Runs outside QGIS. Exposes QGIS operations as MCP tools via [FastMCP](https://gofastmcp.com/).
 
-## Prerequisites
-
-- **QGIS** 3.28 or newer
-- **Python** 3.12+
-- **uv** package manager — [install uv](https://docs.astral.sh/uv/getting-started/installation/)
-
 ## Installation
 
-### 1. Clone the repository
+No clone needed. Requires QGIS 3.28+ and [uv](https://docs.astral.sh/uv/getting-started/installation/).
+
+### 1. Install the QGIS plugin
+
+In QGIS: `Plugins` > `Manage and Install Plugins` > search **QGIS MCP** > Install.
+
+Restart QGIS and click **Start Server** in the QGIS MCP dock widget.
+
+### 2. Connect your coding agent
+
+**Claude Code**
 
 ```bash
-git clone https://github.com/nkarasiak/qgis-mcp.git
-cd qgis-mcp
-```
-
-### 2. Install with the one-command installer (recommended)
-
-```bash
-python install.py
-```
-
-This will:
-- Symlink the QGIS plugin into your QGIS profile
-- Configure your MCP client(s) — supports Claude Desktop, Claude Code, Codex CLI, Cursor, VS Code Copilot, Windsurf, and Zed
-
-Options: `--non-interactive --clients claude-desktop,cursor` for CI, `--remote` for uvx-based installs, `--profile myprofile` for non-default QGIS profiles, `--uninstall` to remove.
-
-Restart QGIS, then enable the plugin: `Plugins` > `Manage and Install Plugins` > search "QGIS MCP" > check the box.
-
-<details>
-<summary><b>Manual installation</b></summary>
-
-#### Install the QGIS plugin manually
-
-Copy (or symlink) the `qgis_mcp_plugin/` folder into your QGIS plugins directory:
-
-**Find your plugins folder:** In QGIS, go to `Settings` > `User Profiles` > `Open Active Profile Folder`, then navigate to `python/plugins/`.
-
-| OS | Typical path |
-|----|-------------|
-| Linux | `~/.local/share/QGIS/QGIS3/profiles/default/python/plugins/` |
-| macOS | `~/Library/Application Support/QGIS/QGIS3/profiles/default/python/plugins/` |
-| Windows | `%APPDATA%\QGIS\QGIS3\profiles\default\python\plugins\` |
-
-```bash
-# Example on Linux (symlink recommended for development)
-ln -s /path/to/qgis-mcp/qgis_mcp_plugin ~/.local/share/QGIS/QGIS3/profiles/default/python/plugins/qgis_mcp_plugin
-```
-
-Restart QGIS, then enable the plugin: `Plugins` > `Manage and Install Plugins` > search "QGIS MCP" > check the box.
-
-#### Connect your MCP client manually
-
-##### Claude Code — project-level (recommended)
-
-A `.mcp.json` is already included at the root of this repo. Claude Code detects it automatically when you open the project — no extra setup needed.
-
-To add it to a different project, or to install at user scope (available everywhere):
-
-```bash
-# User scope — works from any directory
-claude mcp add -s user qgis -- uv run --no-sync --directory /path/to/qgis-mcp src/qgis_mcp/server.py
-
-# Remote — no local clone needed
 claude mcp add -s user qgis -- uvx --from git+https://github.com/nkarasiak/qgis-mcp qgis-mcp-server
 ```
 
@@ -88,13 +39,9 @@ Scope reference:
 | `-s project` | `.mcp.json` (committed) | Whole team, this project |
 | `-s user` | `~/.claude.json` | You, every project |
 
-##### Codex CLI (OpenAI)
+**Codex CLI**
 
 ```bash
-# Local clone
-codex mcp add qgis -- uv run --no-sync --directory /path/to/qgis-mcp src/qgis_mcp/server.py
-
-# Remote
 codex mcp add qgis -- uvx --from git+https://github.com/nkarasiak/qgis-mcp qgis-mcp-server
 ```
 
@@ -106,9 +53,7 @@ command = "uvx"
 args = ["--from", "git+https://github.com/nkarasiak/qgis-mcp", "qgis-mcp-server"]
 ```
 
-##### Gemini CLI
-
-Add to `~/.gemini/settings.json`:
+**Gemini CLI** — add to `~/.gemini/settings.json`:
 
 ```json
 {
@@ -121,9 +66,7 @@ Add to `~/.gemini/settings.json`:
 }
 ```
 
-##### opencode (sst/opencode)
-
-Add to `opencode.json` at your project root:
+**opencode** — add to `opencode.json` at your project root:
 
 ```json
 {
@@ -137,9 +80,7 @@ Add to `opencode.json` at your project root:
 }
 ```
 
-##### Claude Desktop and other clients
-
-Go to `Claude` > `Settings` > `Developer` > `Edit Config` and add the standard JSON block. The same format works for Cursor (`~/.cursor/mcp.json`), VS Code (`.vscode/mcp.json`), Windsurf (`~/.codeium/windsurf/mcp_config.json`), and most other MCP clients:
+**Claude Desktop and other clients** (Cursor, VS Code, Windsurf, …) — use the standard JSON block in your client's MCP config file:
 
 ```json
 {
@@ -154,8 +95,6 @@ Go to `Claude` > `Settings` > `Developer` > `Edit Config` and add the standard J
   }
 }
 ```
-
-</details>
 
 ## Usage
 
@@ -213,13 +152,21 @@ Groups: `system`, `project`, `layer`, `features`, `selection`, `style`, `canvas`
 | `QGIS_MCP_LOG_LEVEL` | `INFO` | File log level |
 | `QGIS_MCP_TOOL_MODE` | `granular` | `granular` (51 tools) or `compound` (~19 grouped) |
 
-## Development
+## Contributing
 
 ```bash
-# Run unit tests (no QGIS needed — mocked socket)
+git clone https://github.com/nkarasiak/qgis-mcp.git
+cd qgis-mcp
+python install.py   # symlinks plugin + configures your MCP client
+```
+
+`install.py` options: `--clients claude-desktop,cursor`, `--remote` (uvx instead of uv run), `--profile myprofile`, `--uninstall`.
+
+```bash
+# Unit tests (no QGIS needed — mocked socket)
 uv run --no-sync pytest tests/test_mcp_tools.py -v
 
-# Run integration tests (requires QGIS plugin running)
+# Integration tests (requires QGIS plugin running)
 uv run --no-sync pytest tests/test_qgis_live.py -v
 ```
 
