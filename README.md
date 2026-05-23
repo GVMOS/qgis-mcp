@@ -25,7 +25,8 @@ Restart QGIS and click **Start Server** in the QGIS MCP dock widget.
 
 ### 2. Connect your coding agent
 
-**Claude Code**
+<details>
+<summary>Claude Code</summary>
 
 ```bash
 claude mcp add -s user qgis -- uvx --from git+https://github.com/nkarasiak/qgis-mcp qgis-mcp-server
@@ -39,7 +40,10 @@ Scope reference:
 | `-s project` | `.mcp.json` (committed) | Whole team, this project |
 | `-s user` | `~/.claude.json` | You, every project |
 
-**Codex CLI**
+</details>
+
+<details>
+<summary>Codex CLI</summary>
 
 ```bash
 codex mcp add qgis -- uvx --from git+https://github.com/nkarasiak/qgis-mcp qgis-mcp-server
@@ -53,7 +57,12 @@ command = "uvx"
 args = ["--from", "git+https://github.com/nkarasiak/qgis-mcp", "qgis-mcp-server"]
 ```
 
-**Gemini CLI** — add to `~/.gemini/settings.json`:
+</details>
+
+<details>
+<summary>Gemini CLI</summary>
+
+Add to `~/.gemini/settings.json`:
 
 ```json
 {
@@ -66,7 +75,12 @@ args = ["--from", "git+https://github.com/nkarasiak/qgis-mcp", "qgis-mcp-server"
 }
 ```
 
-**opencode** — add to `opencode.json` at your project root:
+</details>
+
+<details>
+<summary>opencode</summary>
+
+Add to `opencode.json` at your project root:
 
 ```json
 {
@@ -80,7 +94,12 @@ args = ["--from", "git+https://github.com/nkarasiak/qgis-mcp", "qgis-mcp-server"
 }
 ```
 
-**Claude Desktop and other clients** (Cursor, VS Code, Windsurf, …) — use the standard JSON block in your client's MCP config file:
+</details>
+
+<details>
+<summary>Claude Desktop, Cursor, VS Code, Windsurf, and others</summary>
+
+Add to your client's MCP config file:
 
 ```json
 {
@@ -95,6 +114,8 @@ args = ["--from", "git+https://github.com/nkarasiak/qgis-mcp", "qgis-mcp-server"
   }
 }
 ```
+
+</details>
 
 ## Usage
 
