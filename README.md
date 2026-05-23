@@ -2,7 +2,7 @@
 
 Connect [QGIS](https://qgis.org/) to [Claude AI](https://claude.ai/) through the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/), enabling Claude to directly control QGIS — manage layers, edit features, run processing algorithms, render maps, and more.
 
-51 MCP tools covering layer management, feature editing, processing, rendering, styling, plugin development, and system management. Compatible with QGIS 3.28–4.x. Works with Claude Code, Codex CLI, Gemini CLI, opencode, Claude Desktop, Cursor, VS Code, Windsurf, Zed, and more.
+52 MCP tools covering layer management, feature editing, processing, rendering, styling, plugin development, and system management. Compatible with QGIS 3.28–4.x. Works with Claude Code, Codex CLI, Gemini CLI, opencode, Claude Desktop, Cursor, VS Code, Windsurf, Zed, and more.
 
 ## Architecture
 
@@ -134,7 +134,18 @@ You have access to QGIS tools. Do the following:
 7. Save the project
 ```
 
-## Tools (51)
+## Updating
+
+The plugin (inside QGIS) and the MCP server (outside QGIS) must stay in sync — a newer server sending a command the older plugin doesn't know will return an error. Run `diagnose` after any update to verify both sides match.
+
+| Component | Remote install | Local install (`git clone`) |
+|-----------|---------------|----------------------------|
+| **QGIS plugin** | `Plugins` > `Manage and Install Plugins` > Update | Same — Plugin Manager picks up the new version from QGIS Hub |
+| **MCP server** | Automatic — `uvx` fetches latest on next run | `git pull` then restart the MCP server process |
+
+After updating the plugin, click **Stop / Start** in the QGIS MCP dock widget (or reload via `Plugins` > `QGIS MCP` > `Reload Plugin`) to load the new code without restarting QGIS.
+
+## Tools (52)
 
 | Category | Tools |
 |----------|-------|
@@ -143,7 +154,7 @@ You have access to QGIS tools. Do the following:
 | **Features** | `get_layer_features`, `add_features`, `update_features`, `delete_features`, `select_features`, `get_selection`, `clear_selection`, `get_field_statistics` |
 | **Styling** | `set_layer_style` (single, categorized, graduated) |
 | **Rendering** | `render_map`, `get_canvas_screenshot`, `get_canvas_extent`, `set_canvas_extent` |
-| **Processing** | `execute_processing`, `list_processing_algorithms`, `get_algorithm_help` |
+| **Processing** | `execute_processing`, `list_processing_algorithms`, `get_algorithm_help`, `create_processing_model` |
 | **Layouts** | `list_layouts`, `export_layout` |
 | **Layer tree** | `get_layer_tree`, `create_layer_group`, `move_layer_to_group` |
 | **Plugins** | `list_plugins`, `get_plugin_info`, `reload_plugin` |
@@ -153,7 +164,7 @@ All tools are async with human-readable titles and annotations (`readOnly`, `des
 
 ### Compound tool mode
 
-Set `QGIS_MCP_TOOL_MODE=compound` to reduce the 51 granular tools to ~19 grouped tools, cutting schema overhead per LLM turn. Each compound tool takes an `action` parameter:
+Set `QGIS_MCP_TOOL_MODE=compound` to reduce the 52 granular tools to ~19 grouped tools, cutting schema overhead per LLM turn. Each compound tool takes an `action` parameter:
 
 ```bash
 QGIS_MCP_TOOL_MODE=compound uv run --no-sync src/qgis_mcp/server.py
