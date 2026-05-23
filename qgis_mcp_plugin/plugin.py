@@ -2885,9 +2885,14 @@ class QgisMCPPlugin:
         autostart_wa = QWidgetAction(self.iface.mainWindow())
         autostart_wa.setDefaultWidget(autostart_widget)
 
+        configure_action = QAction("Configure…", self.iface.mainWindow())
+        configure_action.triggered.connect(self._show_help)
+
         menu = QMenu()
         menu.addAction(port_wa)
         menu.addAction(autostart_wa)
+        menu.addSeparator()
+        menu.addAction(configure_action)
 
         # Tool button with dropdown (like Plugin Reloader)
         self.tool_button = QToolButton()
