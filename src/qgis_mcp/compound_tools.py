@@ -439,10 +439,15 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
         title="Processing",
         description=(
             "QGIS Processing framework.\n"
-            "Actions: execute, list_algorithms, get_help\n"
+            "Actions: execute, list_algorithms, get_help, create_model\n"
             "- execute: algorithm (str), parameters (dict)\n"
             "- list_algorithms: search (str, optional), provider (str, optional)\n"
-            "- get_help: algorithm_id (str)"
+            "- get_help: algorithm_id (str)\n"
+            "- create_model: name (str), steps (list[dict]), inputs (list[dict], optional), "
+            "outputs (list[dict], optional), description (str, optional), group (str, optional). "
+            "Step parameter values support '@input', '$step.OUTPUT', '=expression', or static literals. "
+            "The model is always saved into the QGIS user models folder and registered; a numeric "
+            "suffix is appended to the name on collision."
         ),
     )
     async def processing(ctx: Context, action: str, **kwargs) -> dict[str, Any]:
@@ -465,6 +470,20 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
             return await _send("list_processing_algorithms", params)
         elif action == "get_help":
             return await _send("get_algorithm_help", {"algorithm_id": kwargs["algorithm_id"]})
+        elif action == "create_model":
+            await ctx.info(
+                f"Building Processing model: {kwargs['name']} ({len(kwargs['steps'])} step(s))"
+            )
+            params = {
+                "name": kwargs["name"],
+                "steps": kwargs["steps"],
+                "description": kwargs.get("description", ""),
+                "group": kwargs.get("group", "Models"),
+            }
+            for key in ("inputs", "outputs"):
+                if key in kwargs and kwargs[key] is not None:
+                    params[key] = kwargs[key]
+            return await _send("create_processing_model", params, timeout=TIMEOUT_LONG)
         else:
             raise ValueError(f"Unknown processing action: {action}")
 
