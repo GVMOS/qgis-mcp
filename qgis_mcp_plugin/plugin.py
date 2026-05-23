@@ -2552,8 +2552,7 @@ class MCPConfiguratorDialog(QDialog):
             self.status_link.setStyleSheet(f"color: {'green' if is_linked else 'red'};")
             self.relink_btn.setVisible(True)
         else:
-            self.status_link.setText("Plugin Link Status: ✅ (Plugin Manager install)")
-            self.status_link.setStyleSheet("color: green;")
+            self.status_link.setVisible(False)
             self.relink_btn.setVisible(False)
 
         # 2. uv Installation
