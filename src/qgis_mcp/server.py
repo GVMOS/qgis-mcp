@@ -838,6 +838,239 @@ async def create_processing_model(
     return await _send("create_processing_model", params, timeout=TIMEOUT_LONG)
 
 
+@mcp.tool(
+    title="List Processing Models",
+    annotations=ToolAnnotations(readOnlyHint=True),
+    description="List registered Processing models (the 'model' provider). "
+    "Returns id, name, group for each. Use run_model to execute one.",
+    structured_output=True,
+)
+async def list_processing_models(ctx: Context) -> dict[str, Any]:
+    return await _send("list_processing_models")
+
+
+@mcp.tool(
+    title="Run Model",
+    description="Run a Processing model by registered id (e.g. 'model:myflow') or by a "
+    ".model3 file path. 'parameters' maps the model's input names to values "
+    "(layer ids/paths, numbers, etc.).",
+)
+async def run_model(ctx: Context, model: str, parameters: dict | None = None) -> dict:
+    await ctx.info(f"Running model: {model}")
+    await ctx.report_progress(0, 100)
+    result = await _send(
+        "run_model", {"model": model, "parameters": parameters or {}}, timeout=TIMEOUT_LONG
+    )
+    await ctx.report_progress(100, 100)
+    return result
+
+
+@mcp.tool(
+    title="Get Processing Providers",
+    annotations=ToolAnnotations(readOnlyHint=True),
+    description="List Processing providers (native, gdal, grass, saga, model, ...) with "
+    "algorithm counts and active status. Use to diagnose missing algorithms.",
+    structured_output=True,
+)
+async def get_processing_providers(ctx: Context) -> dict[str, Any]:
+    return await _send("get_processing_providers")
+
+
+@mcp.tool(
+    title="Execute Processing Batch",
+    description="Run one algorithm once per parameter dict in 'parameters_list'. "
+    "Returns a per-run result with index and success/error status. Use for applying "
+    "the same operation over many inputs in a single round-trip.",
+)
+async def execute_processing_batch(
+    ctx: Context, algorithm: str, parameters_list: list[dict]
+) -> dict:
+    await ctx.info(f"Batch processing {algorithm}: {len(parameters_list)} run(s)")
+    return await _send(
+        "execute_processing_batch",
+        {"algorithm": algorithm, "parameters_list": parameters_list},
+        timeout=TIMEOUT_LONG,
+    )
+
+
+# --- Raster compute ---
+
+
+@mcp.tool(
+    title="Raster Calculator",
+    description="Band math via the QGIS raster calculator. Reference loaded raster layers "
+    "in the expression as 'LayerName@band' (e.g. '(\"dem@1\" > 1000) * 1'). Writes a GeoTIFF "
+    "to output_path. Output grid/extent taken from reference_layer (layer id or name), "
+    "defaulting to the first loaded raster.",
+)
+async def raster_calculator(
+    ctx: Context, expression: str, output_path: str, reference_layer: str | None = None
+) -> dict:
+    await ctx.info("Computing raster expression...")
+    return await _send(
+        "raster_calculator",
+        {"expression": expression, "output_path": output_path, "reference_layer": reference_layer},
+        timeout=TIMEOUT_LONG,
+    )
+
+
+@mcp.tool(
+    title="Zonal Statistics",
+    description="Compute per-polygon statistics from a raster (native:zonalstatisticsfb). "
+    "'stats' is a list of int codes: 0=count,1=sum,2=mean,3=median,4=stdev,5=min,6=max,"
+    "7=range,8=minority,9=majority,10=variety,11=variance (default [0,1,2]). New columns "
+    "are prefixed by 'prefix'. Omit output_path for an in-memory result layer.",
+)
+async def zonal_statistics(
+    ctx: Context,
+    polygon_layer: str,
+    raster_layer: str,
+    band: int = 1,
+    prefix: str = "_",
+    stats: list[int] | None = None,
+    output_path: str | None = None,
+) -> dict:
+    await ctx.info("Computing zonal statistics...")
+    return await _send(
+        "zonal_statistics",
+        {
+            "polygon_layer": polygon_layer,
+            "raster_layer": raster_layer,
+            "band": band,
+            "prefix": prefix,
+            "stats": stats,
+            "output_path": output_path,
+        },
+        timeout=TIMEOUT_LONG,
+    )
+
+
+@mcp.tool(
+    title="Sample Raster Values",
+    annotations=ToolAnnotations(readOnlyHint=True),
+    description="Sample raster pixel values at points. 'points' is a list of [x, y] in the "
+    "raster's CRS. Omit 'band' to sample all bands. Use transform_coordinates first if your "
+    "points are in a different CRS.",
+)
+async def sample_raster_values(
+    ctx: Context, raster_layer: str, points: list[list[float]], band: int | None = None
+) -> dict[str, Any]:
+    return await _send(
+        "sample_raster_values",
+        {"raster_layer": raster_layer, "points": points, "band": band},
+    )
+
+
+# --- Export ---
+
+
+@mcp.tool(
+    title="Export Layer",
+    annotations=ToolAnnotations(idempotentHint=True),
+    description="Export a vector or raster layer to disk; output format is inferred from the "
+    "output_path extension (.gpkg, .shp, .geojson, .tif, ...). Set target_crs (e.g. 'EPSG:4326') "
+    "to reproject on export. filter_expression (vector only) exports a subset matching a QGIS "
+    "expression.",
+)
+async def export_layer(
+    ctx: Context,
+    layer_id: str,
+    output_path: str,
+    target_crs: str | None = None,
+    filter_expression: str | None = None,
+) -> dict:
+    await ctx.info(f"Exporting layer to {output_path}")
+    return await _send(
+        "export_layer",
+        {
+            "layer_id": layer_id,
+            "output_path": output_path,
+            "target_crs": target_crs,
+            "filter_expression": filter_expression,
+        },
+        timeout=TIMEOUT_LONG,
+    )
+
+
+# --- Vector analysis ---
+
+
+@mcp.tool(
+    title="Field Calculator",
+    description="Add (if missing) and populate a field from a QGIS expression, evaluated per "
+    "feature, in-place. field_type: string|int|double|bool|date|datetime (default double). "
+    "Example: expression='$area', field_name='area_m2'. Returns count of updated features.",
+)
+async def field_calculator(
+    ctx: Context,
+    layer_id: str,
+    field_name: str,
+    expression: str,
+    field_type: str = "double",
+    length: int = 0,
+    precision: int = 0,
+) -> dict:
+    return await _send(
+        "field_calculator",
+        {
+            "layer_id": layer_id,
+            "field_name": field_name,
+            "expression": expression,
+            "field_type": field_type,
+            "length": length,
+            "precision": precision,
+        },
+    )
+
+
+@mcp.tool(
+    title="Get Unique Values",
+    annotations=ToolAnnotations(readOnlyHint=True),
+    description="Return the distinct values of a field. Use 'limit' to cap results "
+    "(-1 for all). Useful before building categorized symbology or filters.",
+)
+async def get_unique_values(
+    ctx: Context, layer_id: str, field: str, limit: int = 1000
+) -> dict[str, Any]:
+    return await _send(
+        "get_unique_values", {"layer_id": layer_id, "field": field, "limit": limit}
+    )
+
+
+@mcp.tool(
+    title="Spatial Join",
+    description="Join attributes by location (native:joinattributesbylocation). "
+    "predicates: list of int (0=intersects,1=contains,2=equals,3=touches,4=overlaps,"
+    "5=within,6=crosses; default [0]). method: 0=one-to-many, 1=first match (default), "
+    "2=largest overlap. join_fields limits which join columns are copied (default all). "
+    "Omit output_path for an in-memory result layer.",
+)
+async def spatial_join(
+    ctx: Context,
+    target_layer: str,
+    join_layer: str,
+    predicates: list[int] | None = None,
+    join_fields: list[str] | None = None,
+    method: int = 1,
+    prefix: str = "",
+    output_path: str | None = None,
+) -> dict:
+    await ctx.info("Joining attributes by location...")
+    return await _send(
+        "spatial_join",
+        {
+            "target_layer": target_layer,
+            "join_layer": join_layer,
+            "predicates": predicates,
+            "join_fields": join_fields,
+            "method": method,
+            "prefix": prefix,
+            "output_path": output_path,
+        },
+        timeout=TIMEOUT_LONG,
+    )
+
+
 # --- Rendering ---
 
 

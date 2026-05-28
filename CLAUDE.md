@@ -57,7 +57,7 @@ uv run --no-sync pytest tests/ -v
 | `QGIS_MCP_LOG_LEVEL` | `INFO` | File log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 | `QGIS_MCP_TOOL_MODE` | `granular` | Tool registration mode: `granular` (51 tools) or `compound` (~19 grouped tools) |
 
-## MCP Tools (52 total)
+## MCP Tools (88 total)
 
 | Tool | Title | Annotations | Description |
 |---|---|---|---|
@@ -113,6 +113,19 @@ uv run --no-sync pytest tests/ -v
 | `get_setting` | Get Setting | readOnly | Read a QGIS setting by key path |
 | `set_setting` | Set Setting | destructive | Write a QGIS setting (elicitation) |
 | `transform_coordinates` | Transform Coordinates | readOnly | CRS transform for points, point lists, or bboxes |
+| `list_processing_models` | List Processing Models | readOnly | List registered Processing models (id, name, group) |
+| `run_model` | Run Model | — | Run a model by registered id or .model3 path (60s, async+progress) |
+| `get_processing_providers` | Get Processing Providers | readOnly | List providers (native/gdal/grass/...) with algo counts + active status |
+| `execute_processing_batch` | Execute Processing Batch | — | Run one algorithm over many parameter dicts; per-run status (60s) |
+| `raster_calculator` | Raster Calculator | — | Band math via QgsRasterCalculator, 'Name@band' refs, GeoTIFF out (60s) |
+| `zonal_statistics` | Zonal Statistics | — | Per-polygon raster stats (native:zonalstatisticsfb), memory or file out (60s) |
+| `sample_raster_values` | Sample Raster Values | readOnly | Sample pixel values at [x,y] points (raster CRS), one/all bands |
+| `export_layer` | Export Layer | idempotent | Export vector/raster to disk; target_crs reproject, filter_expression subset (60s) |
+| `field_calculator` | Field Calculator | — | Add+populate field from QGIS expression, in-place |
+| `get_unique_values` | Get Unique Values | readOnly | Distinct values of a field (limit, -1 for all) |
+| `spatial_join` | Spatial Join | — | Join attributes by location (native:joinattributesbylocation), memory or file out (60s) |
+
+> Note: the "Phase 5/6/7" tools (active layer, canvas scale, labeling, layer CRS, bookmarks, map themes, project CRS, web layers, table joins, field add/delete/rename, QML styles, layout create/add-map, and the processing/analysis tools above) extend the original 52. Some are not yet listed individually in this table — see `execute_command` handlers in `qgis_mcp_plugin/plugin.py` for the authoritative set.
 
 ## MCP Resources
 

@@ -1481,6 +1481,191 @@ async def test_set_project_crs_tool(mock_connection):
     assert "qgis://project" in str(output[1].uri)
 
 
+@pytest.mark.asyncio
+async def test_run_model_uses_long_timeout(mock_connection):
+    mock_connection.send_command.return_value = {
+        "status": "success",
+        "result": {"model": "model:flow", "result": {}},
+    }
+    from qgis_mcp.server import run_model
+
+    ctx = _make_ctx()
+    await run_model(ctx, model="model:flow", parameters={"INPUT": "lyr"})
+    mock_connection.send_command.assert_called_once_with(
+        "run_model", {"model": "model:flow", "parameters": {"INPUT": "lyr"}}, timeout=60
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_model_defaults_empty_parameters(mock_connection):
+    mock_connection.send_command.return_value = {"status": "success", "result": {}}
+    from qgis_mcp.server import run_model
+
+    await run_model(_make_ctx(), model="model:flow")
+    mock_connection.send_command.assert_called_once_with(
+        "run_model", {"model": "model:flow", "parameters": {}}, timeout=60
+    )
+
+
+@pytest.mark.asyncio
+async def test_list_processing_models(mock_connection):
+    mock_connection.send_command.return_value = {
+        "status": "success",
+        "result": {"models": [{"id": "model:a"}], "count": 1},
+    }
+    from qgis_mcp.server import list_processing_models
+
+    result = await list_processing_models(_make_ctx())
+    assert result["count"] == 1
+    mock_connection.send_command.assert_called_once_with(
+        "list_processing_models", None, timeout=30
+    )
+
+
+@pytest.mark.asyncio
+async def test_execute_processing_batch_long_timeout(mock_connection):
+    mock_connection.send_command.return_value = {
+        "status": "success",
+        "result": {"results": [], "count": 0},
+    }
+    from qgis_mcp.server import execute_processing_batch
+
+    plist = [{"INPUT": "a"}, {"INPUT": "b"}]
+    await execute_processing_batch(_make_ctx(), algorithm="native:buffer", parameters_list=plist)
+    mock_connection.send_command.assert_called_once_with(
+        "execute_processing_batch",
+        {"algorithm": "native:buffer", "parameters_list": plist},
+        timeout=60,
+    )
+
+
+@pytest.mark.asyncio
+async def test_zonal_statistics_passes_defaults(mock_connection):
+    mock_connection.send_command.return_value = {
+        "status": "success",
+        "result": {"output_layer_id": "x"},
+    }
+    from qgis_mcp.server import zonal_statistics
+
+    await zonal_statistics(_make_ctx(), polygon_layer="poly", raster_layer="dem")
+    mock_connection.send_command.assert_called_once_with(
+        "zonal_statistics",
+        {
+            "polygon_layer": "poly",
+            "raster_layer": "dem",
+            "band": 1,
+            "prefix": "_",
+            "stats": None,
+            "output_path": None,
+        },
+        timeout=60,
+    )
+
+
+@pytest.mark.asyncio
+async def test_sample_raster_values_readonly(mock_connection):
+    mock_connection.send_command.return_value = {
+        "status": "success",
+        "result": {"samples": [], "count": 0},
+    }
+    from qgis_mcp.server import sample_raster_values
+
+    await sample_raster_values(_make_ctx(), raster_layer="dem", points=[[1.0, 2.0]])
+    mock_connection.send_command.assert_called_once_with(
+        "sample_raster_values",
+        {"raster_layer": "dem", "points": [[1.0, 2.0]], "band": None},
+        timeout=30,
+    )
+
+
+@pytest.mark.asyncio
+async def test_export_layer_with_reproject(mock_connection):
+    mock_connection.send_command.return_value = {
+        "status": "success",
+        "result": {"ok": True, "output": "out.gpkg"},
+    }
+    from qgis_mcp.server import export_layer
+
+    await export_layer(
+        _make_ctx(), layer_id="lyr", output_path="out.gpkg", target_crs="EPSG:4326"
+    )
+    mock_connection.send_command.assert_called_once_with(
+        "export_layer",
+        {
+            "layer_id": "lyr",
+            "output_path": "out.gpkg",
+            "target_crs": "EPSG:4326",
+            "filter_expression": None,
+        },
+        timeout=60,
+    )
+
+
+@pytest.mark.asyncio
+async def test_field_calculator(mock_connection):
+    mock_connection.send_command.return_value = {
+        "status": "success",
+        "result": {"ok": True, "updated": 5, "created": True},
+    }
+    from qgis_mcp.server import field_calculator
+
+    result = await field_calculator(
+        _make_ctx(), layer_id="lyr", field_name="area_m2", expression="$area"
+    )
+    assert result["updated"] == 5
+    mock_connection.send_command.assert_called_once_with(
+        "field_calculator",
+        {
+            "layer_id": "lyr",
+            "field_name": "area_m2",
+            "expression": "$area",
+            "field_type": "double",
+            "length": 0,
+            "precision": 0,
+        },
+        timeout=30,
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_unique_values(mock_connection):
+    mock_connection.send_command.return_value = {
+        "status": "success",
+        "result": {"field": "type", "values": ["a", "b"], "count": 2},
+    }
+    from qgis_mcp.server import get_unique_values
+
+    result = await get_unique_values(_make_ctx(), layer_id="lyr", field="type")
+    assert result["count"] == 2
+    mock_connection.send_command.assert_called_once_with(
+        "get_unique_values", {"layer_id": "lyr", "field": "type", "limit": 1000}, timeout=30
+    )
+
+
+@pytest.mark.asyncio
+async def test_spatial_join_long_timeout(mock_connection):
+    mock_connection.send_command.return_value = {
+        "status": "success",
+        "result": {"output_layer_id": "j"},
+    }
+    from qgis_mcp.server import spatial_join
+
+    await spatial_join(_make_ctx(), target_layer="t", join_layer="j")
+    mock_connection.send_command.assert_called_once_with(
+        "spatial_join",
+        {
+            "target_layer": "t",
+            "join_layer": "j",
+            "predicates": None,
+            "join_fields": None,
+            "method": 1,
+            "prefix": "",
+            "output_path": None,
+        },
+        timeout=60,
+    )
+
+
 def test_compound_tools_register():
     """Test that compound tools can be registered."""
     from qgis_mcp.compound_tools import register_compound_tools
