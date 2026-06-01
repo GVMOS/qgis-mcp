@@ -35,7 +35,7 @@ changelog=0.4.0 : Add ~50 new tools (processing/analysis: raster calculator, zon
     spatial join, sample raster, export layer, field calculator, unique values, processing
     batch/models; layouts: legend, scalebar, picture, table, atlas configure/export;
     SQL across layers, layer duplicate/order, evaluate/identify), create_processing_model
-    tool + prompt, cut granular tool-schema tokens ~19%, installer auto-refresh + old config
+    tool + prompt, cut granular tool-schema tokens ~19 percent, installer auto-refresh + old config
     migration, plugin menu icon, remove deprecated supportsQt6 metadata flag
     0.3.1 : Security fix (remove subprocess shell=True), Configure dialog UX redesign,
     fix remote mode detection, hide Plugin Link Status for Plugin Manager installs
