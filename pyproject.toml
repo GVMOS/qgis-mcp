@@ -5,9 +5,12 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/qgis_mcp"]
 
+[tool.uv]
+package = true
+
 [project]
 name = "qgis-mcp"
-version = "0.3.0"
+version = "0.4.0"
 description = "QGIS integration through the Model Context Protocol"
 readme = "README.md"
 requires-python = ">=3.12"

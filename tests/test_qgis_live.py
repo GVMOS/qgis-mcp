@@ -559,3 +559,109 @@ def test_raster_info_no_redundant_fields(client, setup_test_data):
     resp = client.send_command("get_raster_info", {"layer_id": setup_test_data})
     # Our test layer is vector, so this should error
     assert resp["status"] == "error"
+
+
+# --- Phase 8: layout/atlas authoring, query & management ---
+
+
+def test_layout_build_and_inspect(client):
+    name = f"layout_{uuid.uuid4().hex[:8]}"
+    assert client.send_command("create_layout", {"name": name})["status"] == "success"
+    assert client.send_command(
+        "add_layout_map", {"layout_name": name, "x": 10, "y": 10, "width": 100, "height": 80}
+    )["status"] == "success"
+    assert client.send_command(
+        "add_layout_label", {"layout_name": name, "text": "Title"}
+    )["status"] == "success"
+    assert client.send_command(
+        "add_layout_legend", {"layout_name": name}
+    )["status"] == "success"
+    assert client.send_command(
+        "add_layout_scalebar", {"layout_name": name}
+    )["status"] == "success"
+
+    info = client.send_command("get_layout_info", {"layout_name": name})
+    assert info["status"] == "success"
+    types = {it["type"] for it in info["result"]["items"]}
+    assert "QgsLayoutItemMap" in types
+    assert "QgsLayoutItemLabel" in types
+
+    # cleanup
+    assert client.send_command("remove_layout", {"layout_name": name})["status"] == "success"
+
+
+def test_layout_table(client, setup_test_data):
+    name = f"layout_{uuid.uuid4().hex[:8]}"
+    client.send_command("create_layout", {"name": name})
+    resp = client.send_command(
+        "add_layout_table", {"layout_name": name, "layer_id": setup_test_data}
+    )
+    assert resp["status"] == "success"
+    client.send_command("remove_layout", {"layout_name": name})
+
+
+def test_configure_atlas(client, setup_test_data):
+    name = f"layout_{uuid.uuid4().hex[:8]}"
+    client.send_command("create_layout", {"name": name})
+    client.send_command(
+        "add_layout_map", {"layout_name": name, "x": 10, "y": 10, "width": 100, "height": 80}
+    )
+    resp = client.send_command(
+        "configure_atlas", {"layout_name": name, "coverage_layer": setup_test_data}
+    )
+    assert resp["status"] == "success"
+    assert resp["result"]["count"] == 5
+    client.send_command("remove_layout", {"layout_name": name})
+
+
+def test_execute_sql_inline(client, setup_test_data):
+    layers_resp = client.send_command("get_layers")
+    layer = next(
+        lyr for lyr in layers_resp["result"]["layers"] if lyr["id"] == setup_test_data
+    )
+    query = f'select count(*) as n from "{layer["name"]}"'
+    resp = client.send_command("execute_sql", {"query": query})
+    assert resp["status"] == "success"
+    assert resp["result"]["rows"][0]["n"] == 5
+
+
+def test_evaluate_expression(client, setup_test_data):
+    resp = client.send_command("evaluate_expression", {"expression": "1 + 41"})
+    assert resp["status"] == "success"
+    assert resp["result"]["result"] == 42
+
+
+def test_evaluate_expression_aggregate(client, setup_test_data):
+    layers_resp = client.send_command("get_layers")
+    layer = next(
+        lyr for lyr in layers_resp["result"]["layers"] if lyr["id"] == setup_test_data
+    )
+    expr = f"aggregate('{layer['name']}', 'sum', \"value\")"
+    resp = client.send_command("evaluate_expression", {"expression": expr})
+    assert resp["status"] == "success"
+    assert resp["result"]["result"] == 1000.0  # 0+100+200+300+400
+
+
+def test_identify_features(client, setup_test_data):
+    # feature 0 is at (0, 0)
+    resp = client.send_command(
+        "identify_features",
+        {"point": [0.0, 0.0], "tolerance": 1.0, "layer_ids": [setup_test_data]},
+    )
+    assert resp["status"] == "success"
+    assert resp["result"]["results"][0]["count"] >= 1
+
+
+def test_duplicate_layer(client, setup_test_data):
+    resp = client.send_command(
+        "duplicate_layer", {"layer_id": setup_test_data, "new_name": "dup_test"}
+    )
+    assert resp["status"] == "success"
+    new_id = resp["result"]["output_layer_id"]
+    assert new_id != setup_test_data
+    client.send_command("remove_layer", {"layer_id": new_id})
+
+
+def test_set_layer_order(client, setup_test_data):
+    resp = client.send_command("set_layer_order", {"layer_ids": [setup_test_data]})
+    assert resp["status"] == "success"

@@ -37,15 +37,31 @@ def _appdata() -> Path:
     return Path(os.environ.get("APPDATA", _home() / "AppData" / "Roaming"))
 
 
-def qgis_plugins_dir(profile: str) -> Path:
-    base = {
-        "linux": _home() / ".local" / "share" / "QGIS" / "QGIS3",
-        "darwin": _home() / "Library" / "Application Support" / "QGIS" / "QGIS3",
-        "win32": _appdata() / "QGIS" / "QGIS3",
-    }.get(sys.platform)
+def _qgis_base_dir(version: str) -> Path:
+    """Return the QGIS data root for a given major version ('3' or '4')."""
+    folder = f"QGIS{version}"
+    bases = {
+        "linux": _home() / ".local" / "share" / "QGIS" / folder,
+        "darwin": _home() / "Library" / "Application Support" / "QGIS" / folder,
+        "win32": _appdata() / "QGIS" / folder,
+    }
+    base = bases.get(sys.platform)
     if base is None:
         sys.exit(f"Unsupported platform: {sys.platform}")
-    return base / "profiles" / profile / "python" / "plugins"
+    return base
+
+
+def _detect_qgis_version() -> str:
+    """Return '4' if QGIS4 profile dir exists, else '3'."""
+    if _qgis_base_dir("4").exists():
+        return "4"
+    return "3"
+
+
+def qgis_plugins_dir(profile: str, version: str = "auto") -> Path:
+    if version == "auto":
+        version = _detect_qgis_version()
+    return _qgis_base_dir(version) / "profiles" / profile / "python" / "plugins"
 
 
 # ── Client config paths ────────────────────────────────────────────────────
@@ -135,10 +151,19 @@ def setup_venv() -> None:
 
 def _local_entry() -> dict:
     if shutil.which("uv"):
+        # `--directory` is preferred over `cwd` because some MCP clients (notably
+        # MSIX-packaged Claude Desktop on Windows) run servers in a sandbox that
+        # silently ignores `cwd`. `--directory` bakes the project path into the
+        # command itself so it works regardless of the spawn environment.
         return {
             "command": "uv",
-            "args": ["run", "--no-sync", "src/qgis_mcp/server.py"],
-            "cwd": str(REPO_DIR),
+            "args": [
+                "--directory",
+                str(REPO_DIR),
+                "run",
+                "--no-sync",
+                "src/qgis_mcp/server.py",
+            ],
         }
     # Fallback: run directly from the venv Python
     return {
@@ -159,7 +184,13 @@ def _zed_local_entry() -> dict:
         return {
             "command": {
                 "path": "uv",
-                "args": ["run", "--no-sync", "src/qgis_mcp/server.py"],
+                "args": [
+                    "--directory",
+                    str(REPO_DIR),
+                    "run",
+                    "--no-sync",
+                    "src/qgis_mcp/server.py",
+                ],
                 "env": {"QGIS_MCP_TRANSPORT": "stdio"},
             },
             "settings": {},
@@ -194,19 +225,34 @@ def _server_entry(client: str, remote: bool) -> dict:
 # ── Plugin installation ────────────────────────────────────────────────────
 
 
-def install_plugin(profile: str) -> Path:
-    plugins_dir = qgis_plugins_dir(profile)
+def _remove_target(target: Path) -> None:
+    """Remove a plugin target — handles files, symlinks, Windows junctions, and dirs.
+
+    Path.is_symlink() returns False for Windows directory junctions (created via
+    `mklink /J`), so we also check os.path.islink() and fall back to rmdir() for
+    junctions before resorting to shutil.rmtree() on real directories.
+    """
+    if target.is_symlink() or os.path.islink(target) or target.is_file():
+        target.unlink()
+    elif sys.platform == "win32":
+        try:
+            target.rmdir()  # cleanly removes a junction without touching the target
+        except OSError:
+            shutil.rmtree(target)
+    else:
+        shutil.rmtree(target)
+
+
+def install_plugin(profile: str, version: str = "auto") -> Path:
+    plugins_dir = qgis_plugins_dir(profile, version)
     target = plugins_dir / "qgis_mcp_plugin"
 
-    if target.is_symlink() or target.exists():
+    if target.is_symlink() or target.exists() or os.path.islink(target):
         if target.is_symlink() and target.resolve() == PLUGIN_SRC.resolve():
             print(f"  Plugin already linked: {target}")
             return target
         print(f"  Removing existing: {target}")
-        if target.is_symlink() or target.is_file():
-            target.unlink()
-        else:
-            shutil.rmtree(target)
+        _remove_target(target)
 
     plugins_dir.mkdir(parents=True, exist_ok=True)
 
@@ -223,13 +269,10 @@ def install_plugin(profile: str) -> Path:
     return target
 
 
-def uninstall_plugin(profile: str) -> None:
-    target = qgis_plugins_dir(profile) / "qgis_mcp_plugin"
-    if target.is_symlink() or target.exists():
-        if target.is_symlink() or target.is_file():
-            target.unlink()
-        else:
-            shutil.rmtree(target)
+def uninstall_plugin(profile: str, version: str = "auto") -> None:
+    target = qgis_plugins_dir(profile, version) / "qgis_mcp_plugin"
+    if target.is_symlink() or target.exists() or os.path.islink(target):
+        _remove_target(target)
         print(f"  Removed: {target}")
     else:
         print(f"  Not installed: {target}")
@@ -409,6 +452,12 @@ def main() -> None:
     )
     parser.add_argument("--profile", default="default", help="QGIS profile name (default: default)")
     parser.add_argument(
+        "--qgis-version",
+        default="auto",
+        choices=["auto", "3", "4"],
+        help="QGIS major version to target (default: auto-detect, prefers 4)",
+    )
+    parser.add_argument(
         "--clients", help="Comma-separated client names (e.g. claude-desktop,cursor)"
     )
     parser.add_argument("--non-interactive", action="store_true", help="Skip interactive prompts")
@@ -418,18 +467,23 @@ def main() -> None:
     parser.add_argument("--uninstall", action="store_true", help="Remove plugin and client configs")
     args = parser.parse_args()
 
+    qgis_ver = args.qgis_version
+    if qgis_ver == "auto":
+        qgis_ver = _detect_qgis_version()
+
     print(f"QGIS MCP Installer ({'uninstall' if args.uninstall else 'install'})")
-    print(f"Platform: {sys.platform}")
-    print(f"Profile:  {args.profile}")
+    print(f"Platform:     {sys.platform}")
+    print(f"Profile:      {args.profile}")
+    print(f"QGIS version: {qgis_ver}")
     print()
 
     # ── Plugin ──
     if args.uninstall:
         print("[1/3] Removing QGIS plugin...")
-        uninstall_plugin(args.profile)
+        uninstall_plugin(args.profile, qgis_ver)
     else:
         print("[1/3] Installing QGIS plugin...")
-        install_plugin(args.profile)
+        install_plugin(args.profile, qgis_ver)
 
     # ── Dependencies (skip for uninstall and remote mode) ──
     if not args.uninstall and not args.remote:

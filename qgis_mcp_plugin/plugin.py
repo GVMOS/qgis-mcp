@@ -8,7 +8,6 @@ import re
 import shutil
 import socket
 import struct
-import subprocess
 import sys
 import traceback
 from collections import deque
@@ -42,6 +41,25 @@ from qgis.core import (
     QgsMapSettings,
     QgsMessageLog,
     QgsPointXY,
+    QgsProcessingModelAlgorithm,
+    QgsProcessingModelChildAlgorithm,
+    QgsProcessingModelChildParameterSource,
+    QgsProcessingModelOutput,
+    QgsProcessingModelParameter,
+    QgsProcessingParameterBoolean,
+    QgsProcessingParameterCrs,
+    QgsProcessingParameterDistance,
+    QgsProcessingParameterEnum,
+    QgsProcessingParameterExtent,
+    QgsProcessingParameterFeatureSource,
+    QgsProcessingParameterField,
+    QgsProcessingParameterFile,
+    QgsProcessingParameterMultipleLayers,
+    QgsProcessingParameterNumber,
+    QgsProcessingParameterPoint,
+    QgsProcessingParameterRasterLayer,
+    QgsProcessingParameterString,
+    QgsProcessingParameterVectorLayer,
     QgsPrintLayout,
     QgsProject,
     QgsRasterLayer,
@@ -66,12 +84,11 @@ from qgis.PyQt.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QMenu,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QSpinBox,
-    QTabWidget,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -91,6 +108,12 @@ from .compat import (
     GEOM_POLYGON,
     IODEVICE_WRITEONLY,
     LAYER_RASTER,
+    QVAR_BOOL,
+    QVAR_DATE,
+    QVAR_DATETIME,
+    QVAR_DOUBLE,
+    QVAR_INT,
+    QVAR_STRING,
     LAYER_VECTOR,
     LAYOUT_SUCCESS,
     MSG_CRITICAL,
@@ -239,8 +262,8 @@ class QgisMCPServer(QObject):
                                 raise ValueError(f"Message too large: {msg_len} bytes")
                             if len(buf) < 4 + msg_len:
                                 break  # Incomplete message
-                            msg_bytes = buf[4 : 4 + msg_len]
-                            buf = buf[4 + msg_len :]
+                            msg_bytes = buf[4:4 + msg_len]
+                            buf = buf[4 + msg_len:]
                             try:
                                 command = json.loads(msg_bytes.decode("utf-8"))
                             except (json.JSONDecodeError, UnicodeDecodeError) as e:
@@ -306,6 +329,7 @@ class QgisMCPServer(QObject):
                 "create_memory_layer": self.create_memory_layer,
                 "list_processing_algorithms": self.list_processing_algorithms,
                 "get_algorithm_help": self.get_algorithm_help,
+                "create_processing_model": self.create_processing_model,
                 "find_layer": self.find_layer,
                 "list_layouts": self.list_layouts,
                 "export_layout": self.export_layout,
@@ -356,6 +380,33 @@ class QgisMCPServer(QObject):
                 "export_geoserver_publish_manifest": self.export_geoserver_publish_manifest,
                 "create_layout": self.create_layout,
                 "add_layout_map": self.add_layout_map,
+                # Phase 7 — Processing framework + analysis
+                "list_processing_models": self.list_processing_models,
+                "run_model": self.run_model,
+                "get_processing_providers": self.get_processing_providers,
+                "execute_processing_batch": self.execute_processing_batch,
+                "raster_calculator": self.raster_calculator,
+                "zonal_statistics": self.zonal_statistics,
+                "sample_raster_values": self.sample_raster_values,
+                "export_layer": self.export_layer,
+                "field_calculator": self.field_calculator,
+                "get_unique_values": self.get_unique_values,
+                "spatial_join": self.spatial_join,
+                # Phase 8 — Layout/atlas authoring, query & management
+                "get_layout_info": self.get_layout_info,
+                "add_layout_label": self.add_layout_label,
+                "add_layout_legend": self.add_layout_legend,
+                "add_layout_scalebar": self.add_layout_scalebar,
+                "add_layout_picture": self.add_layout_picture,
+                "add_layout_table": self.add_layout_table,
+                "configure_atlas": self.configure_atlas,
+                "export_atlas": self.export_atlas,
+                "remove_layout": self.remove_layout,
+                "execute_sql": self.execute_sql,
+                "evaluate_expression": self.evaluate_expression,
+                "identify_features": self.identify_features,
+                "duplicate_layer": self.duplicate_layer,
+                "set_layer_order": self.set_layer_order,
             }
 
             handler = handlers.get(cmd_type)
@@ -598,7 +649,7 @@ class QgisMCPServer(QObject):
         project = QgsProject.instance()
         all_layers = list(project.mapLayers().items())
         total_count = len(all_layers)
-        page = all_layers[offset : offset + limit]
+        page = all_layers[offset:offset + limit]
 
         layers = []
         for layer_id, layer in page:
@@ -1278,6 +1329,390 @@ class QgisMCPServer(QObject):
             "outputs": outputs,
         }
 
+    # ------------------------------------------------------------------
+    # Processing Model construction
+    # ------------------------------------------------------------------
+
+    def _resolve_algorithm_id(self, hint, registry):
+        """Resolve an algorithm hint to a fully-qualified id (e.g. 'native:buffer').
+
+        Direct lookup against ``QgsApplication.processingRegistry()``: the LLM
+        passes a keyword like ``"buffer"`` or a full id, and this matches it
+        against algorithm ids, display names and tags. Falls back with a
+        candidate list when the hint is ambiguous, so the caller can refine.
+        """
+        if not isinstance(hint, str) or not hint.strip():
+            raise Exception("Algorithm hint must be a non-empty string")
+        hint_clean = hint.strip()
+
+        # 1. Exact id match (incl. fully qualified 'native:buffer').
+        alg = registry.algorithmById(hint_clean)
+        if alg is not None:
+            return alg.id()
+
+        hint_lower = hint_clean.lower()
+        exact_name = []   # display name == hint
+        suffix_id = []    # id suffix == hint (after ':')
+        contains = []     # display name or id suffix contains hint
+        for alg in registry.algorithms():
+            alg_id = alg.id()
+            id_suffix = alg_id.split(":", 1)[-1].lower()
+            disp = alg.displayName().lower()
+            if disp == hint_lower:
+                exact_name.append(alg)
+            elif id_suffix == hint_lower:
+                suffix_id.append(alg)
+            elif hint_lower in disp or hint_lower in id_suffix:
+                contains.append(alg)
+
+        def _pick(group):
+            if len(group) == 1:
+                return group[0].id()
+            natives = [a for a in group if a.provider().id() == "native"]
+            if len(natives) == 1:
+                return natives[0].id()
+            return None
+
+        for group in (exact_name, suffix_id, contains):
+            picked = _pick(group)
+            if picked:
+                return picked
+
+        all_candidates = exact_name + suffix_id + contains
+        if not all_candidates:
+            raise Exception(
+                f"No Processing algorithm matches '{hint_clean}'. "
+                "Pass a keyword found in the algorithm name or its full id (e.g. 'native:buffer')."
+            )
+        # Show up to 8 candidates so the LLM can disambiguate next call.
+        sample = ", ".join(
+            f"{a.id()} ({a.displayName()})"
+            for a in sorted(all_candidates, key=lambda a: (a.provider().id() != "native", len(a.id())))[:8]
+        )
+        raise Exception(
+            f"Algorithm hint '{hint_clean}' is ambiguous. Candidates: {sample}. "
+            "Use the full id."
+        )
+
+    def _build_param_source(self, value, defined_inputs, defined_steps):
+        """Convert a JSON-friendly value into a QgsProcessingModelChildParameterSource.
+
+        String prefixes:
+          @name          -> reference to model input parameter
+          $step.OUTPUT   -> reference to a previous step's output
+          =expression    -> evaluated QGIS expression
+        Lists are converted element-wise; everything else becomes a static value.
+        """
+        Src = QgsProcessingModelChildParameterSource
+
+        if isinstance(value, list):
+            return [self._build_param_source(v, defined_inputs, defined_steps)[0] for v in value]
+
+        if isinstance(value, str):
+            if value.startswith("@"):
+                ref = value[1:]
+                if ref not in defined_inputs:
+                    raise Exception(
+                        f"Parameter reference '{value}' points to undefined model input '{ref}'"
+                    )
+                return [Src.fromModelParameter(ref)]
+            if value.startswith("$"):
+                rest = value[1:]
+                if "." not in rest:
+                    raise Exception(
+                        f"Step output reference '{value}' must be in '$step_id.OUTPUT_NAME' form"
+                    )
+                child_id, output_name = rest.split(".", 1)
+                if child_id not in defined_steps:
+                    raise Exception(
+                        f"Step output reference '{value}' points to undefined step '{child_id}'"
+                    )
+                return [Src.fromChildOutput(child_id, output_name)]
+            if value.startswith("="):
+                return [Src.fromExpression(value[1:])]
+
+        return [Src.fromStaticValue(value)]
+
+    def _make_input_definition(self, spec):
+        """Build a QgsProcessingParameterDefinition from a JSON spec dict."""
+        type_name = (spec.get("type") or "string").lower()
+        name = spec["name"]
+        description = spec.get("description", name)
+        default = spec.get("default", None)
+        optional = bool(spec.get("optional", False))
+
+        if type_name in ("vector", "vector_layer"):
+            param = QgsProcessingParameterVectorLayer(name, description, defaultValue=default)
+        elif type_name in ("feature_source", "source"):
+            param = QgsProcessingParameterFeatureSource(name, description, defaultValue=default)
+        elif type_name in ("raster", "raster_layer"):
+            param = QgsProcessingParameterRasterLayer(name, description, defaultValue=default)
+        elif type_name == "field":
+            parent = spec.get("parent_layer")
+            if not parent:
+                raise Exception(f"Input '{name}' of type 'field' requires 'parent_layer'")
+            param = QgsProcessingParameterField(
+                name, description, parentLayerParameterName=parent, defaultValue=default
+            )
+        elif type_name in ("number", "int", "integer", "float", "double"):
+            param = QgsProcessingParameterNumber(name, description, defaultValue=default)
+            if type_name in ("int", "integer"):
+                with contextlib.suppress(AttributeError):
+                    param.setDataType(QgsProcessingParameterNumber.Integer)
+        elif type_name == "distance":
+            param = QgsProcessingParameterDistance(name, description, defaultValue=default)
+            parent = spec.get("parent_layer")
+            if parent:
+                param.setParentParameterName(parent)
+        elif type_name == "string":
+            param = QgsProcessingParameterString(name, description, defaultValue=default)
+        elif type_name in ("boolean", "bool"):
+            param = QgsProcessingParameterBoolean(
+                name, description, defaultValue=bool(default) if default is not None else False
+            )
+        elif type_name == "extent":
+            param = QgsProcessingParameterExtent(name, description, defaultValue=default)
+        elif type_name == "crs":
+            param = QgsProcessingParameterCrs(
+                name, description, defaultValue=default or "EPSG:4326"
+            )
+        elif type_name == "point":
+            param = QgsProcessingParameterPoint(name, description, defaultValue=default)
+        elif type_name == "file":
+            param = QgsProcessingParameterFile(name, description, defaultValue=default)
+        elif type_name == "folder":
+            param = QgsProcessingParameterFile(name, description, defaultValue=default)
+            try:
+                param.setBehavior(QgsProcessingParameterFile.Folder)
+            except AttributeError:
+                try:
+                    param.setBehavior(Qgis.ProcessingFileParameterBehavior.Folder)
+                except AttributeError:
+                    pass
+        elif type_name == "enum":
+            options = spec.get("options") or []
+            param = QgsProcessingParameterEnum(
+                name, description, options=options, defaultValue=default
+            )
+        elif type_name in ("multiple_layers", "layers"):
+            param = QgsProcessingParameterMultipleLayers(name, description, defaultValue=default)
+        else:
+            raise Exception(f"Unsupported input type '{type_name}' for input '{name}'")
+
+        if optional:
+            try:
+                param.setFlags(param.flags() | PROCESSING_OPTIONAL)
+            except Exception:
+                pass
+        return param
+
+    def create_processing_model(
+        self,
+        name,
+        steps,
+        inputs=None,
+        outputs=None,
+        description="",
+        group="Models",
+        **kwargs,
+    ):
+        """Build a Processing Model from a structured spec, save it into the
+        QGIS user models folder under a unique name, and register it.
+
+        Reference syntax in step parameter values:
+          "@input_name"        – model input parameter
+          "$step_id.OUTPUT"    – output of a previous step
+          "=expression"        – QGIS expression
+          anything else        – static literal (numbers, bools, strings, lists, ...)
+        """
+        if not name or not isinstance(name, str):
+            raise Exception("Model 'name' is required")
+        if not isinstance(steps, list) or not steps:
+            raise Exception("'steps' must be a non-empty list")
+
+        registry = QgsApplication.processingRegistry()
+
+        # ---- Resolve models folder & pick a unique file name up front ----
+        provider = registry.providerById("model")
+        models_dir = None
+        if provider is not None and hasattr(provider, "modelsFolder"):
+            try:
+                models_dir = provider.modelsFolder()
+            except Exception:
+                models_dir = None
+        if models_dir is None:
+            models_dir = os.path.join(
+                QgsApplication.qgisSettingsDirPath(), "processing", "models"
+            )
+        os.makedirs(models_dir, exist_ok=True)
+
+        final_name = name
+        target_path = os.path.join(models_dir, f"{final_name}.model3")
+        if os.path.exists(target_path):
+            for suffix in range(2, 1001):
+                candidate = f"{name}_{suffix}"
+                candidate_path = os.path.join(models_dir, f"{candidate}.model3")
+                if not os.path.exists(candidate_path):
+                    final_name = candidate
+                    target_path = candidate_path
+                    break
+            else:
+                raise Exception(
+                    f"Could not find a unique name for '{name}' in {models_dir} "
+                    "(tried up to _1000)"
+                )
+
+        # ---- Build model skeleton ----
+        model = QgsProcessingModelAlgorithm()
+        model.setName(final_name)
+        if group:
+            model.setGroup(group)
+        if description:
+            try:
+                model.setHelpContent({"ALG_DESC": description})
+            except Exception:
+                pass
+
+        # ---- Inputs ----
+        defined_inputs = set()
+        for idx, spec in enumerate(inputs or []):
+            if not isinstance(spec, dict) or "name" not in spec:
+                raise Exception(f"Input #{idx} must be a dict with at least 'name'")
+            param_def = self._make_input_definition(spec)
+            mp = QgsProcessingModelParameter(spec["name"])
+            mp.setPosition(QPointF(50.0, 50.0 + idx * 100.0))
+            model.addModelParameter(param_def, mp)
+            defined_inputs.add(spec["name"])
+
+        # ---- Steps ----
+        # Validate shape & resolve algorithm hints up front so we never write
+        # a half-built file. Each step entry is normalized to a fully-qualified
+        # algorithm id stored under '_resolved_algorithm'.
+        defined_steps: list[str] = []
+        resolved: list[tuple[dict, str]] = []  # (step_spec, resolved_alg_id)
+        seen_ids: set[str] = set()
+        for idx, step in enumerate(steps):
+            if not isinstance(step, dict):
+                raise Exception(f"Step #{idx} must be a dict")
+            for required in ("id", "algorithm"):
+                if required not in step:
+                    raise Exception(f"Step #{idx} missing required key '{required}'")
+            if step["id"] in seen_ids:
+                raise Exception(f"Duplicate step id '{step['id']}'")
+            seen_ids.add(step["id"])
+            try:
+                alg_id = self._resolve_algorithm_id(step["algorithm"], registry)
+            except Exception as e:
+                raise Exception(f"Step '{step['id']}': {e}") from e
+            alg = registry.algorithmById(alg_id)
+            valid_params = {p.name() for p in alg.parameterDefinitions()}
+            for pname in (step.get("parameters") or {}):
+                if pname not in valid_params:
+                    raise Exception(
+                        f"Step '{step['id']}' (algorithm '{alg_id}'): unknown parameter "
+                        f"'{pname}'. Valid parameters: {sorted(valid_params)}"
+                    )
+            resolved.append((step, alg_id))
+
+        # Outputs may be marked on a per-step basis; collect them by step id
+        outputs_by_step: dict[str, dict[str, dict]] = {}
+        step_id_to_alg: dict[str, str] = {step["id"]: alg_id for step, alg_id in resolved}
+        for out_idx, out_spec in enumerate(outputs or []):
+            if not isinstance(out_spec, dict):
+                raise Exception(f"Output #{out_idx} must be a dict")
+            for required in ("name", "from_step", "from_output"):
+                if required not in out_spec:
+                    raise Exception(f"Output #{out_idx} missing required key '{required}'")
+            from_step = out_spec["from_step"]
+            if from_step not in step_id_to_alg:
+                raise Exception(
+                    f"Output '{out_spec['name']}': from_step '{from_step}' is not a defined step"
+                )
+            from_alg = registry.algorithmById(step_id_to_alg[from_step])
+            valid_outputs = {o.name() for o in from_alg.outputDefinitions()}
+            if out_spec["from_output"] not in valid_outputs:
+                raise Exception(
+                    f"Output '{out_spec['name']}': '{out_spec['from_output']}' is not an output "
+                    f"of step '{from_step}' (algorithm '{step_id_to_alg[from_step]}'). "
+                    f"Valid outputs: {sorted(valid_outputs)}"
+                )
+            outputs_by_step.setdefault(from_step, {})[out_spec["name"]] = out_spec
+
+        for step_idx, (step, alg_id) in enumerate(resolved):
+            child = QgsProcessingModelChildAlgorithm(alg_id)
+            child.setChildId(step["id"])
+            child.setDescription(step.get("description") or registry.algorithmById(alg_id).displayName())
+            child.setPosition(QPointF(300.0 + step_idx * 250.0, 50.0))
+
+            for pname, pvalue in (step.get("parameters") or {}).items():
+                # Build sources, validating refs against already-defined inputs/steps.
+                sources = self._build_param_source(pvalue, defined_inputs, set(defined_steps))
+                child.addParameterSources(pname, sources)
+
+            # Final outputs declared for this step
+            step_outputs = outputs_by_step.get(step["id"], {})
+            if step_outputs:
+                model_outputs = {}
+                for out_name, out_spec in step_outputs.items():
+                    mo = QgsProcessingModelOutput(out_name)
+                    mo.setChildId(step["id"])
+                    mo.setChildOutputName(out_spec["from_output"])
+                    mo.setDescription(out_spec.get("description") or out_name)
+                    model_outputs[out_name] = mo
+                child.setModelOutputs(model_outputs)
+
+            model.addChildAlgorithm(child)
+            defined_steps.append(step["id"])
+
+        # If the user did not declare any outputs, expose the last step's OUTPUT
+        # under a default name so the model produces something the user can save.
+        if not outputs and defined_steps:
+            last_step_id = defined_steps[-1]
+            last_child = model.childAlgorithm(last_step_id)
+            last_alg = registry.algorithmById(last_child.algorithmId())
+            output_names = [o.name() for o in last_alg.outputDefinitions()] if last_alg else []
+            preferred = "OUTPUT" if "OUTPUT" in output_names else (output_names[0] if output_names else None)
+            if preferred:
+                mo = QgsProcessingModelOutput("Result")
+                mo.setChildId(last_step_id)
+                mo.setChildOutputName(preferred)
+                mo.setDescription("Result")
+                last_child.setModelOutputs({"Result": mo})
+
+        # ---- Write the .model3 file directly into the models folder ----
+        if not model.toFile(target_path):
+            raise Exception(f"Failed to write model to {target_path}")
+
+        # ---- Register with the model provider so it shows up in the toolbox ----
+        registered = False
+        if provider is not None:
+            try:
+                provider.refreshAlgorithms()
+                registered = True
+            except Exception as e:
+                QgsMessageLog.logMessage(
+                    f"Model saved but provider refresh failed: {e}", self.LOG_TAG, MSG_WARNING
+                )
+
+        QgsMessageLog.logMessage(
+            f"Processing model '{final_name}' saved to {target_path}", self.LOG_TAG, MSG_INFO
+        )
+        return {
+            "ok": True,
+            "name": final_name,
+            "requested_name": name,
+            "path": target_path,
+            "registered": registered,
+            "input_count": len(defined_inputs),
+            "step_count": len(defined_steps),
+            "output_count": sum(len(v) for v in outputs_by_step.values()) or (1 if defined_steps else 0),
+            # Echo the resolved algorithm ids so the caller can confirm fuzzy matches.
+            "resolved_steps": [
+                {"id": step["id"], "algorithm": alg_id, "hint": step["algorithm"]}
+                for step, alg_id in resolved
+            ],
+        }
+
     def find_layer(self, name_pattern, **kwargs):
         project = QgsProject.instance()
         matches = []
@@ -1888,14 +2323,14 @@ class QgisMCPServer(QObject):
         layer = self._get_vector_layer(layer_id)
 
         type_map = {
-            "string": QVariant.String,
-            "int": QVariant.Int,
-            "double": QVariant.Double,
-            "bool": QVariant.Bool,
-            "date": QVariant.Date,
-            "datetime": QVariant.DateTime,
+            "string": QVAR_STRING,
+            "int": QVAR_INT,
+            "double": QVAR_DOUBLE,
+            "bool": QVAR_BOOL,
+            "date": QVAR_DATE,
+            "datetime": QVAR_DATETIME,
         }
-        v_type = type_map.get(field_type.lower(), QVariant.String)
+        v_type = type_map.get(field_type.lower(), QVAR_STRING)
         field = QgsField(field_name, v_type, field_type, length or 0, precision or 0)
 
         if layer.dataProvider().addAttributes([field]):
@@ -2178,6 +2613,774 @@ class QgisMCPServer(QObject):
         layout.addLayoutItem(map_item)
         return {"ok": True}
 
+    # ------------------------------------------------------------------
+    # Layout & atlas authoring (extended)
+    # ------------------------------------------------------------------
+
+    def _get_layout(self, layout_name):
+        """Get a print layout by name or raise."""
+        layout = QgsProject.instance().layoutManager().layoutByName(layout_name)
+        if not layout:
+            raise Exception(f"Layout not found: {layout_name}")
+        return layout
+
+    def _find_layout_map(self, layout, map_item_id=None):
+        """Find a map item in a layout by id/uuid, else the first map item."""
+        maps = [it for it in layout.items() if isinstance(it, QgsLayoutItemMap)]
+        if not maps:
+            return None
+        if map_item_id:
+            for m in maps:
+                if m.id() == map_item_id or m.uuid() == map_item_id:
+                    return m
+        return maps[0]
+
+    def get_layout_info(self, layout_name, **kwargs):
+        """List items in a print layout (type, id, position, size)."""
+        layout = self._get_layout(layout_name)
+        items = []
+        for item in layout.items():
+            if not hasattr(item, "uuid"):
+                continue
+            try:
+                pos = item.positionWithUnits()
+                size = item.sizeWithUnits()
+                x, y = pos.x(), pos.y()
+                w, h = size.width(), size.height()
+            except Exception:
+                x = y = w = h = None
+            items.append(
+                {
+                    "id": item.id(),
+                    "uuid": item.uuid(),
+                    "type": type(item).__name__,
+                    "x": x,
+                    "y": y,
+                    "width": w,
+                    "height": h,
+                }
+            )
+        return {
+            "layout": layout_name,
+            "items": items,
+            "count": len(items),
+            "page_count": layout.pageCollection().pageCount(),
+        }
+
+    def add_layout_label(
+        self,
+        layout_name,
+        text,
+        x=10,
+        y=10,
+        width=100,
+        height=20,
+        font_size=12,
+        color="#000000",
+        **kwargs,
+    ):
+        """Add a text label to a print layout. Supports [% expression %] in text."""
+        from qgis.core import QgsLayoutItemLabel
+
+        layout = self._get_layout(layout_name)
+        label = QgsLayoutItemLabel(layout)
+        label.setText(text)
+        label.setFontColor(QColor(color))
+        font = label.font()
+        font.setPointSize(int(font_size))
+        label.setFont(font)
+        layout.addLayoutItem(label)
+        label.attemptMove(QgsLayoutPoint(x, y))
+        label.attemptResize(QgsLayoutSize(width, height))
+        return {"ok": True, "uuid": label.uuid()}
+
+    def add_layout_legend(
+        self,
+        layout_name,
+        map_item_id=None,
+        x=10,
+        y=10,
+        width=80,
+        height=100,
+        title="Legend",
+        **kwargs,
+    ):
+        """Add a legend to a print layout, linked to a map item."""
+        from qgis.core import QgsLayoutItemLegend
+
+        layout = self._get_layout(layout_name)
+        legend = QgsLayoutItemLegend(layout)
+        legend.setTitle(title)
+        map_item = self._find_layout_map(layout, map_item_id)
+        if map_item:
+            legend.setLinkedMap(map_item)
+        layout.addLayoutItem(legend)
+        legend.attemptMove(QgsLayoutPoint(x, y))
+        legend.attemptResize(QgsLayoutSize(width, height))
+        return {"ok": True, "uuid": legend.uuid()}
+
+    def add_layout_scalebar(
+        self,
+        layout_name,
+        map_item_id=None,
+        x=10,
+        y=180,
+        width=80,
+        height=20,
+        style="Single Box",
+        **kwargs,
+    ):
+        """Add a scale bar to a print layout, linked to a map item."""
+        from qgis.core import QgsLayoutItemScaleBar
+
+        layout = self._get_layout(layout_name)
+        bar = QgsLayoutItemScaleBar(layout)
+        bar.setStyle(style)
+        map_item = self._find_layout_map(layout, map_item_id)
+        if map_item:
+            bar.setLinkedMap(map_item)
+        bar.applyDefaultSize()
+        layout.addLayoutItem(bar)
+        bar.attemptMove(QgsLayoutPoint(x, y))
+        return {"ok": True, "uuid": bar.uuid()}
+
+    def add_layout_picture(
+        self, layout_name, path, x=10, y=10, width=30, height=30, **kwargs
+    ):
+        """Add a picture/SVG (logo, north arrow) to a print layout."""
+        from qgis.core import QgsLayoutItemPicture
+
+        layout = self._get_layout(layout_name)
+        pic = QgsLayoutItemPicture(layout)
+        pic.setPicturePath(path)
+        layout.addLayoutItem(pic)
+        pic.attemptMove(QgsLayoutPoint(x, y))
+        pic.attemptResize(QgsLayoutSize(width, height))
+        return {"ok": True, "uuid": pic.uuid()}
+
+    def add_layout_table(
+        self,
+        layout_name,
+        layer_id,
+        x=10,
+        y=10,
+        width=180,
+        height=80,
+        max_rows=20,
+        **kwargs,
+    ):
+        """Add an attribute table for a vector layer to a print layout."""
+        from qgis.core import QgsLayoutFrame, QgsLayoutItemAttributeTable
+
+        layer = self._get_vector_layer(layer_id)
+        layout = self._get_layout(layout_name)
+        table = QgsLayoutItemAttributeTable.create(layout)
+        table.setVectorLayer(layer)
+        table.setMaximumNumberOfFeatures(int(max_rows))
+        layout.addMultiFrame(table)
+        frame = QgsLayoutFrame(layout, table)
+        frame.attemptMove(QgsLayoutPoint(x, y))
+        frame.attemptResize(QgsLayoutSize(width, height))
+        table.addFrame(frame)
+        return {"ok": True, "uuid": frame.uuid()}
+
+    def configure_atlas(
+        self,
+        layout_name,
+        coverage_layer,
+        enabled=True,
+        page_name_expression=None,
+        filter_expression=None,
+        sort_expression=None,
+        **kwargs,
+    ):
+        """Configure the atlas of a print layout (coverage layer, filter, sort)."""
+        layer = self._get_vector_layer(coverage_layer)
+        layout = self._get_layout(layout_name)
+        atlas = layout.atlas()
+        atlas.setEnabled(bool(enabled))
+        atlas.setCoverageLayer(layer)
+        if page_name_expression:
+            atlas.setPageNameExpression(page_name_expression)
+        if filter_expression:
+            atlas.setFilterFeatures(True)
+            atlas.setFilterExpression(filter_expression)
+        if sort_expression:
+            atlas.setSortFeatures(True)
+            atlas.setSortExpression(sort_expression)
+        atlas.updateFeatures()
+        return {
+            "ok": True,
+            "coverage_layer": layer.name(),
+            "enabled": bool(enabled),
+            "count": atlas.count(),
+        }
+
+    def export_atlas(self, layout_name, output_path, format="pdf", dpi=300, **kwargs):
+        """Export an atlas: single multi-page PDF, or one image file per feature."""
+        import os
+
+        layout = self._get_layout(layout_name)
+        atlas = layout.atlas()
+        if not atlas.enabled():
+            raise Exception("Atlas not enabled; call configure_atlas first")
+        atlas.updateFeatures()
+        fmt = format.lower()
+        if fmt == "pdf":
+            settings = QgsLayoutExporter.PdfExportSettings()
+            settings.dpi = dpi
+            result, error = QgsLayoutExporter.exportToPdf(atlas, output_path, settings)
+        elif fmt in ("png", "jpg", "jpeg", "tif", "tiff"):
+            os.makedirs(output_path, exist_ok=True)
+            settings = QgsLayoutExporter.ImageExportSettings()
+            settings.dpi = dpi
+            base = os.path.join(output_path, layout_name)
+            result, error = QgsLayoutExporter.exportToImage(atlas, base, fmt, settings)
+        else:
+            raise Exception(f"Unsupported atlas format: {format}")
+        if result != LAYOUT_SUCCESS:
+            raise Exception(f"Atlas export failed: {error}")
+        return {"ok": True, "output": output_path, "count": atlas.count()}
+
+    def remove_layout(self, layout_name, **kwargs):
+        """Remove a print layout from the project."""
+        manager = QgsProject.instance().layoutManager()
+        layout = manager.layoutByName(layout_name)
+        if not layout:
+            raise Exception(f"Layout not found: {layout_name}")
+        manager.removeLayout(layout)
+        return {"ok": True, "removed": layout_name}
+
+    # ------------------------------------------------------------------
+    # Query, expression & layer management (extended)
+    # ------------------------------------------------------------------
+
+    def execute_sql(
+        self,
+        query,
+        layers=None,
+        as_layer=False,
+        layer_name="sql_result",
+        geometry_field=None,
+        uid_field=None,
+        **kwargs,
+    ):
+        """Run SQL across loaded layers via a virtual layer. Reference layers by name."""
+        from qgis.core import QgsVirtualLayerDefinition
+
+        project = QgsProject.instance()
+        definition = QgsVirtualLayerDefinition()
+        src_ids = layers or list(project.mapLayers().keys())
+        for lid in src_ids:
+            lyr = project.mapLayer(lid)
+            if lyr is None:
+                raise Exception(f"Layer not found: {lid}")
+            definition.addSource(lyr.name(), lid)
+        definition.setQuery(query)
+        if geometry_field:
+            definition.setGeometryField(geometry_field)
+        else:
+            definition.setGeometryWkbType(QgsWkbTypes.NoGeometry)
+        if uid_field:
+            definition.setUid(uid_field)
+        vlayer = QgsVectorLayer(definition.toString(), layer_name, "virtual")
+        if not vlayer.isValid():
+            raise Exception(f"Invalid SQL/virtual layer for query: {query}")
+        if as_layer:
+            project.addMapLayer(vlayer)
+            return {
+                "output_layer_id": vlayer.id(),
+                "name": vlayer.name(),
+                "feature_count": vlayer.featureCount(),
+            }
+        fields = [f.name() for f in vlayer.fields()]
+        rows = []
+        for i, feat in enumerate(vlayer.getFeatures()):
+            if i >= 1000:
+                break
+            rows.append({fn: feat[fn] for fn in fields})
+        return {"fields": fields, "rows": rows, "count": len(rows)}
+
+    def evaluate_expression(self, expression, layer_id=None, **kwargs):
+        """Evaluate a standalone QGIS expression to a scalar value."""
+        exp = QgsExpression(expression)
+        context = QgsExpressionContext()
+        context.appendScope(QgsExpressionContextUtils.globalScope())
+        context.appendScope(
+            QgsExpressionContextUtils.projectScope(QgsProject.instance())
+        )
+        if layer_id:
+            layer = self._get_vector_layer(layer_id)
+            context.appendScope(QgsExpressionContextUtils.layerScope(layer))
+        value = exp.evaluate(context)
+        if exp.hasParserError():
+            raise Exception(f"Parser error: {exp.parserErrorString()}")
+        if exp.hasEvalError():
+            raise Exception(f"Eval error: {exp.evalErrorString()}")
+        return {"expression": expression, "result": value}
+
+    def identify_features(
+        self, point, tolerance=0.0, layer_ids=None, limit=10, **kwargs
+    ):
+        """Identify features at a point [x, y] (project CRS) across layers."""
+        project = QgsProject.instance()
+        x, y = float(point[0]), float(point[1])
+        pt_geom = QgsGeometry.fromPointXY(QgsPointXY(x, y))
+        if layer_ids:
+            targets = [project.mapLayer(lid) for lid in layer_ids]
+        else:
+            targets = [
+                n.layer() for n in project.layerTreeRoot().findLayers() if n.isVisible()
+            ]
+        prefilter = QgsRectangle(
+            x - tolerance, y - tolerance, x + tolerance, y + tolerance
+        )
+        results = []
+        for layer in targets:
+            if layer is None or layer.type() != LAYER_VECTOR:
+                continue
+            req = QgsFeatureRequest().setFilterRect(prefilter)
+            feats = []
+            for feat in layer.getFeatures(req):
+                geom = feat.geometry()
+                if geom.isEmpty():
+                    continue
+                if tolerance > 0:
+                    if geom.distance(pt_geom) > tolerance:
+                        continue
+                elif not geom.intersects(pt_geom):
+                    continue
+                attrs = {f.name(): feat[f.name()] for f in layer.fields()}
+                attrs["_fid"] = feat.id()
+                feats.append(attrs)
+                if len(feats) >= limit:
+                    break
+            if feats:
+                results.append(
+                    {
+                        "layer_id": layer.id(),
+                        "name": layer.name(),
+                        "features": feats,
+                        "count": len(feats),
+                    }
+                )
+        return {"point": [x, y], "results": results}
+
+    def duplicate_layer(self, layer_id, new_name=None, **kwargs):
+        """Duplicate a layer (with its style) under a new name."""
+        project = QgsProject.instance()
+        if layer_id not in project.mapLayers():
+            raise Exception(f"Layer not found: {layer_id}")
+        layer = project.mapLayer(layer_id)
+        clone = layer.clone()
+        clone.setName(new_name or f"{layer.name()} copy")
+        project.addMapLayer(clone)
+        return {"ok": True, "output_layer_id": clone.id(), "name": clone.name()}
+
+    def set_layer_order(self, layer_ids, **kwargs):
+        """Set explicit layer draw order in the tree (top to bottom)."""
+        project = QgsProject.instance()
+        root = project.layerTreeRoot()
+        layers = []
+        for lid in layer_ids:
+            lyr = project.mapLayer(lid)
+            if lyr is None:
+                raise Exception(f"Layer not found: {lid}")
+            layers.append(lyr)
+        root.setHasCustomLayerOrder(True)
+        root.setCustomLayerOrder(layers)
+        return {"ok": True, "order": layer_ids}
+
+    # ------------------------------------------------------------------
+    # Processing framework (extended)
+    # ------------------------------------------------------------------
+
+    def list_processing_models(self, **kwargs):
+        """List registered Processing models (provider 'model')."""
+        registry = QgsApplication.processingRegistry()
+        models = []
+        for alg in registry.algorithms():
+            if alg.provider().id() == "model":
+                models.append(
+                    {"id": alg.id(), "name": alg.displayName(), "group": alg.group()}
+                )
+        return {"models": models, "count": len(models)}
+
+    def run_model(self, model, parameters=None, **kwargs):
+        """Run a Processing model by registered id or by .model3 file path."""
+        import processing
+
+        parameters = parameters or {}
+        if isinstance(model, str) and model.lower().endswith(".model3"):
+            alg = QgsProcessingModelAlgorithm()
+            if not alg.fromFile(model):
+                raise Exception(f"Failed to load model file: {model}")
+            alg.initAlgorithm()
+            target = alg
+        else:
+            target = model
+        result = processing.run(target, parameters)
+        return {"model": model, "result": {k: str(v) for k, v in result.items()}}
+
+    def get_processing_providers(self, **kwargs):
+        """List Processing providers with algorithm counts and active status."""
+        registry = QgsApplication.processingRegistry()
+        providers = []
+        for p in registry.providers():
+            info = {
+                "id": p.id(),
+                "name": p.name(),
+                "algorithm_count": len(p.algorithms()),
+            }
+            try:
+                info["active"] = bool(p.isActive())
+            except Exception:
+                pass
+            providers.append(info)
+        return {"providers": providers, "count": len(providers)}
+
+    def execute_processing_batch(self, algorithm, parameters_list, **kwargs):
+        """Run the same algorithm once per parameter dict; collect per-run results."""
+        import processing
+
+        results = []
+        for i, params in enumerate(parameters_list):
+            try:
+                r = processing.run(algorithm, params)
+                results.append(
+                    {
+                        "index": i,
+                        "status": "success",
+                        "result": {k: str(v) for k, v in r.items()},
+                    }
+                )
+            except Exception as e:
+                results.append({"index": i, "status": "error", "message": str(e)})
+        return {"algorithm": algorithm, "results": results, "count": len(results)}
+
+    # ------------------------------------------------------------------
+    # Raster compute
+    # ------------------------------------------------------------------
+
+    def raster_calculator(self, expression, output_path, reference_layer=None, **kwargs):
+        """Band math via QgsRasterCalculator. Reference loaded rasters as 'name@band'."""
+        from qgis.analysis import QgsRasterCalculator, QgsRasterCalculatorEntry
+
+        project = QgsProject.instance()
+        entries = []
+        ref = None
+        rasters = []
+        for lid, layer in project.mapLayers().items():
+            if layer.type() != LAYER_RASTER:
+                continue
+            rasters.append(layer)
+            for band in range(1, layer.bandCount() + 1):
+                e = QgsRasterCalculatorEntry()
+                e.ref = f"{layer.name()}@{band}"
+                e.raster = layer
+                e.bandNumber = band
+                entries.append(e)
+            if reference_layer and reference_layer in (lid, layer.name()):
+                ref = layer
+        if ref is None:
+            if not rasters:
+                raise Exception("No raster layers loaded to compute from")
+            ref = rasters[0]
+
+        extent = ref.extent()
+        cols = ref.width()
+        rows = ref.height()
+        try:
+            calc = QgsRasterCalculator(
+                expression, output_path, "GTiff", extent, cols, rows, entries,
+                project.transformContext(),
+            )
+        except TypeError:
+            calc = QgsRasterCalculator(
+                expression, output_path, "GTiff", extent, cols, rows, entries
+            )
+        res = calc.processCalculation()
+        if int(res) != 0:
+            raise Exception(f"Raster calculation failed (code {int(res)})")
+        return {"ok": True, "output": output_path, "reference_layer": ref.name()}
+
+    def zonal_statistics(
+        self, polygon_layer, raster_layer, band=1, prefix="_", stats=None,
+        output_path=None, **kwargs,
+    ):
+        """Per-polygon raster statistics (native:zonalstatisticsfb).
+
+        stats: list of int codes (0=count,1=sum,2=mean,3=median,4=stdev,5=min,
+        6=max,7=range,8=minority,9=majority,10=variety,11=variance).
+        """
+        import processing
+
+        poly = self._get_vector_layer(polygon_layer)
+        rast = self._resolve_raster_layer(raster_layer)
+        params = {
+            "INPUT": poly,
+            "INPUT_RASTER": rast,
+            "RASTER_BAND": band,
+            "COLUMN_PREFIX": prefix,
+            "STATISTICS": stats or [0, 1, 2],
+            "OUTPUT": output_path or "memory:zonal_stats",
+        }
+        r = processing.run("native:zonalstatisticsfb", params)
+        return self._register_output(r["OUTPUT"], "zonal_stats")
+
+    def sample_raster_values(self, raster_layer, points, band=None, **kwargs):
+        """Sample raster values at points [[x, y], ...] in the raster's CRS."""
+        layer = self._resolve_raster_layer(raster_layer)
+        dp = layer.dataProvider()
+        results = []
+        for pt in points:
+            p = QgsPointXY(pt[0], pt[1])
+            if band:
+                val, ok = dp.sample(p, band)
+                results.append(
+                    {"x": pt[0], "y": pt[1], "band": band, "value": val if ok else None}
+                )
+            else:
+                vals = {}
+                for b in range(1, layer.bandCount() + 1):
+                    v, ok = dp.sample(p, b)
+                    vals[b] = v if ok else None
+                results.append({"x": pt[0], "y": pt[1], "values": vals})
+        return {"samples": results, "count": len(results)}
+
+    # ------------------------------------------------------------------
+    # Export
+    # ------------------------------------------------------------------
+
+    def export_layer(
+        self, layer_id, output_path, target_crs=None, filter_expression=None, **kwargs
+    ):
+        """Export a vector/raster layer to disk. target_crs reprojects; format by extension."""
+        import processing
+
+        project = QgsProject.instance()
+        if layer_id not in project.mapLayers():
+            raise Exception(f"Layer not found: {layer_id}")
+        layer = project.mapLayer(layer_id)
+
+        if layer.type() == LAYER_VECTOR:
+            src = layer
+            if filter_expression:
+                r = processing.run(
+                    "native:extractbyexpression",
+                    {"INPUT": layer, "EXPRESSION": filter_expression, "OUTPUT": "memory:"},
+                )
+                src = r["OUTPUT"]
+            if target_crs:
+                processing.run(
+                    "native:reprojectlayer",
+                    {"INPUT": src, "TARGET_CRS": target_crs, "OUTPUT": output_path},
+                )
+            else:
+                processing.run("native:savefeatures", {"INPUT": src, "OUTPUT": output_path})
+            return {"ok": True, "output": output_path}
+
+        if layer.type() == LAYER_RASTER:
+            if target_crs:
+                processing.run(
+                    "gdal:warpreproject",
+                    {"INPUT": layer, "TARGET_CRS": target_crs, "OUTPUT": output_path},
+                )
+            else:
+                processing.run("gdal:translate", {"INPUT": layer, "OUTPUT": output_path})
+            return {"ok": True, "output": output_path}
+
+        raise Exception(f"Unsupported layer type for export: {layer_id}")
+
+    # ------------------------------------------------------------------
+    # Vector helpers
+    # ------------------------------------------------------------------
+
+    def field_calculator(
+        self, layer_id, field_name, expression, field_type="double",
+        length=0, precision=0, **kwargs,
+    ):
+        """Add (if missing) and populate a field from a QGIS expression, in-place."""
+        layer = self._get_vector_layer(layer_id)
+        type_map = {
+            "string": QVAR_STRING,
+            "int": QVAR_INT,
+            "double": QVAR_DOUBLE,
+            "bool": QVAR_BOOL,
+            "date": QVAR_DATE,
+            "datetime": QVAR_DATETIME,
+        }
+        idx = layer.fields().indexOf(field_name)
+        created = False
+        if idx < 0:
+            v_type = type_map.get(field_type.lower(), QVAR_DOUBLE)
+            layer.dataProvider().addAttributes(
+                [QgsField(field_name, v_type, field_type, length, precision)]
+            )
+            layer.updateFields()
+            idx = layer.fields().indexOf(field_name)
+            created = True
+
+        expr = QgsExpression(expression)
+        if expr.hasParserError():
+            raise Exception(f"Expression parse error: {expr.parserErrorString()}")
+        ctx = QgsExpressionContext()
+        ctx.appendScopes(QgsExpressionContextUtils.globalProjectLayerScopes(layer))
+        expr.prepare(ctx)
+
+        if not layer.startEditing():
+            raise Exception("Could not start editing layer")
+        updated = 0
+        for feat in layer.getFeatures():
+            ctx.setFeature(feat)
+            val = expr.evaluate(ctx)
+            if expr.hasEvalError():
+                continue
+            layer.changeAttributeValue(feat.id(), idx, val)
+            updated += 1
+        if not layer.commitChanges():
+            errs = "; ".join(layer.commitErrors())
+            raise Exception(f"Commit failed: {errs}")
+        return {"ok": True, "field_name": field_name, "created": created, "updated": updated}
+
+    def get_unique_values(self, layer_id, field, limit=1000, **kwargs):
+        """Return distinct values of a field (limit -1 for all)."""
+        layer = self._get_vector_layer(layer_id)
+        idx = layer.fields().indexOf(field)
+        if idx < 0:
+            raise Exception(f"Field not found: {field}")
+        raw = layer.uniqueValues(idx, limit)
+        values = [v for v in raw if v is not None and str(v) != "NULL"]
+        with contextlib.suppress(TypeError):
+            values = sorted(values, key=lambda x: (str(type(x)), x))
+        return {"field": field, "values": values, "count": len(values)}
+
+    def spatial_join(
+        self, target_layer, join_layer, predicates=None, join_fields=None,
+        method=1, prefix="", output_path=None, **kwargs,
+    ):
+        """Join attributes by location (native:joinattributesbylocation).
+
+        predicates: list of int (0=intersects,1=contains,2=equals,3=touches,
+        4=overlaps,5=within,6=crosses). method: 0=one-to-many, 1=first match,
+        2=largest overlap.
+        """
+        import processing
+
+        target = self._get_vector_layer(target_layer)
+        join = self._get_vector_layer(join_layer)
+        params = {
+            "INPUT": target,
+            "JOIN": join,
+            "PREDICATE": predicates or [0],
+            "JOIN_FIELDS": join_fields or [],
+            "METHOD": method,
+            "PREFIX": prefix,
+            "OUTPUT": output_path or "memory:joined",
+        }
+        r = processing.run("native:joinattributesbylocation", params)
+        return self._register_output(r["OUTPUT"], "joined")
+
+    # ------------------------------------------------------------------
+    # Shared helpers for the tools above
+    # ------------------------------------------------------------------
+
+    def _resolve_raster_layer(self, layer_id):
+        """Get a raster layer by id or raise."""
+        project = QgsProject.instance()
+        if layer_id not in project.mapLayers():
+            raise Exception(f"Layer not found: {layer_id}")
+        layer = project.mapLayer(layer_id)
+        if layer.type() != LAYER_RASTER:
+            raise Exception(f"Not a raster layer: {layer_id}")
+        return layer
+
+    def _register_output(self, out, default_name):
+        """Add a processing output layer to the project, or report a file path."""
+        if isinstance(out, str):
+            return {"output": out}
+        out.setName(default_name)
+        QgsProject.instance().addMapLayer(out)
+        return {"output_layer_id": out.id(), "name": out.name()}
+
+
+def _client_config_registry(repo_dir):
+    """Map client name -> {path, key} (or {print_only}) for MCP config files.
+
+    Shared by the configurator dialog and the stale-config migration check.
+    """
+    home = Path.home()
+    appdata = (
+        Path(os.environ.get("APPDATA", home / "AppData" / "Roaming"))
+        if sys.platform == "win32"
+        else None
+    )
+
+    if sys.platform == "darwin":
+        claude_cfg = (
+            home / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
+        )
+    elif sys.platform == "win32":
+        claude_cfg = appdata / "Claude" / "claude_desktop_config.json"
+    else:
+        claude_cfg = home / ".config" / "Claude" / "claude_desktop_config.json"
+
+    cursor_cfg = home / ".cursor" / "mcp.json"
+    windsurf_cfg = home / ".windsurf" / "mcp.json"
+    vscode_cfg = repo_dir / ".vscode" / "mcp.json"
+
+    if sys.platform == "win32":
+        zed_cfg = appdata / "Zed" / "settings.json"
+    else:
+        zed_cfg = home / ".config" / "zed" / "settings.json"
+
+    return {
+        "claude-desktop": {"path": claude_cfg, "key": "mcpServers"},
+        "cursor": {"path": cursor_cfg, "key": "mcpServers"},
+        "vscode": {"path": vscode_cfg, "key": "mcpServers", "project_local": True},
+        "windsurf": {"path": windsurf_cfg, "key": "mcpServers"},
+        "zed": {"path": zed_cfg, "key": "context_servers"},
+        "claude-code": {"print_only": True},
+    }
+
+
+def _qgis_entry_command_args(entry):
+    """Return (command, args) for a 'qgis' server entry, handling the zed shape.
+
+    Zed nests {'command': {'path': ..., 'args': [...]}}; others use a flat
+    {'command': 'uvx', 'args': [...]}.
+    """
+    if not isinstance(entry, dict):
+        return None, []
+    cmd = entry.get("command")
+    if isinstance(cmd, dict):  # zed
+        return cmd.get("path"), cmd.get("args", [])
+    return cmd, entry.get("args", [])
+
+
+def _qgis_entry_is_stale(entry):
+    """True when a remote uvx 'qgis' entry lacks --refresh-package (won't auto-update)."""
+    command, args = _qgis_entry_command_args(entry)
+    if command != "uvx" or "qgis-mcp-server" not in args:
+        return False  # local mode / unknown — leave alone
+    return "--refresh-package" not in args
+
+
+def _add_refresh_to_entry(entry):
+    """Insert '--refresh-package qgis-mcp' before '--from' in a uvx 'qgis' entry."""
+    cmd = entry.get("command")
+    args = cmd.get("args", []) if isinstance(cmd, dict) else entry.get("args", [])
+    try:
+        idx = args.index("--from")
+    except ValueError:
+        idx = 0
+    args[idx:idx] = ["--refresh-package", "qgis-mcp"]
+    if isinstance(cmd, dict):
+        cmd["args"] = args
+    else:
+        entry["args"] = args
+    return entry
+
 
 class MCPConfiguratorDialog(QDialog):
     def __init__(self, iface, parent=None):
@@ -2196,83 +3399,130 @@ class MCPConfiguratorDialog(QDialog):
 
     def init_ui(self):
         layout = QVBoxLayout(self)
-        self.tabs = QTabWidget()
+        layout.setSpacing(10)
 
-        # Tab 1: Guide
-        self.guide_tab = QWidget()
-        self.init_guide_tab()
-        self.tabs.addTab(self.guide_tab, "Guide")
+        # ── Client selector ──────────────────────────────────────────
+        client_row = QHBoxLayout()
+        client_row.addWidget(QLabel("AI client:"))
+        self.client_combo = QComboBox()
+        self.client_combo.addItems(
+            ["claude-desktop", "cursor", "vscode", "windsurf", "zed", "claude-code"]
+        )
+        self.client_combo.setMinimumWidth(180)
+        self.client_combo.currentTextChanged.connect(self._on_client_changed)
+        client_row.addWidget(self.client_combo)
 
-        # Tab 2: Auto-Config
-        self.config_tab = QWidget()
-        self.init_config_tab()
-        self.tabs.addTab(self.config_tab, "Auto-Config")
+        # Mode selector — only relevant for dev installs with a local clone
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItems(["Remote (uvx — recommended)", "Local (uv run)"])
+        self.mode_combo.setToolTip(
+            "Remote: install MCP server on-the-fly via uvx (no clone needed).\n"
+            "Local: run MCP server from your git clone via uv."
+        )
+        self.mode_combo.currentTextChanged.connect(self._on_client_changed)
+        self.mode_combo.setVisible(self._is_dev_install())
+        client_row.addWidget(self.mode_combo)
 
-        layout.addWidget(self.tabs)
+        # Refresh toggle — adds `--refresh-package qgis-mcp` so uvx re-pulls the
+        # latest server from GitHub on every launch (remote mode only).
+        self.refresh_check = QCheckBox("Always pull latest")
+        self.refresh_check.setToolTip(
+            "Add --refresh-package qgis-mcp so uvx re-pulls the latest server from\n"
+            "GitHub on every client launch (stays in sync with the plugin).\n"
+            "Uncheck to pin to the cached version (faster start, manual updates)."
+        )
+        self.refresh_check.setChecked(True)
+        self.refresh_check.toggled.connect(self._on_client_changed)
+        client_row.addWidget(self.refresh_check)
+        client_row.addStretch()
+        layout.addLayout(client_row)
 
-        # Bottom Buttons
-        btn_layout = QHBoxLayout()
-        self.github_btn = QPushButton("Open GitHub")
-        self.github_btn.clicked.connect(
+        # ── Preview area ─────────────────────────────────────────────
+        self.preview_label = QLabel("Add to your client config file:")
+        layout.addWidget(self.preview_label)
+
+        preview_row = QHBoxLayout()
+        self.preview_edit = QPlainTextEdit()
+        self.preview_edit.setReadOnly(True)
+        self.preview_edit.setMaximumHeight(160)
+        preview_row.addWidget(self.preview_edit)
+
+        copy_col = QVBoxLayout()
+        self.copy_btn = QPushButton("Copy")
+        self.copy_btn.setFixedWidth(60)
+        self.copy_btn.clicked.connect(self._copy_preview)
+        copy_col.addWidget(self.copy_btn)
+        copy_col.addStretch()
+        preview_row.addLayout(copy_col)
+        layout.addLayout(preview_row)
+
+        # ── Status + actions ─────────────────────────────────────────
+        self.status_label = QLabel()
+        layout.addWidget(self.status_label)
+
+        action_row = QHBoxLayout()
+        self.apply_btn = QPushButton("Apply Config")
+        self.apply_btn.setStyleSheet(
+            "QPushButton { background-color: #4CAF50; color: white; font-weight: bold; padding: 5px 14px; }"
+            "QPushButton:disabled { background-color: #aaa; }"
+        )
+        self.apply_btn.clicked.connect(self.run_config)
+        action_row.addWidget(self.apply_btn)
+        action_row.addStretch()
+        github_btn = QPushButton("Open GitHub")
+        github_btn.clicked.connect(
             lambda: QDesktopServices.openUrl(QUrl("https://github.com/nkarasiak/qgis-mcp"))
         )
-        btn_layout.addWidget(self.github_btn)
-        btn_layout.addStretch()
-        self.close_btn = QPushButton("Close")
-        self.close_btn.clicked.connect(self.accept)
-        btn_layout.addWidget(self.close_btn)
-        layout.addLayout(btn_layout)
+        action_row.addWidget(github_btn)
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        action_row.addWidget(close_btn)
+        layout.addLayout(action_row)
 
-    def init_guide_tab(self):
-        layout = QVBoxLayout(self.guide_tab)
-        text = (
-            "<h2>QGIS MCP Setup Guide</h2>"
-            "<p>This plugin enables QGIS to be controlled by LLMs via the Model Context Protocol (MCP).</p>"
-            "<ol>"
-            "<li><b>Start the Server:</b> Click the MCP icon in the toolbar to start the TCP server inside QGIS.</li>"
-            "<li><b>Configure Client:</b> Use the 'Auto-Config' tab to add QGIS to your favorite LLM client.</li>"
-            "<li><b>Dependencies:</b> Ensure <code>uv</code> is installed on your system for best experience.</li>"
-            "</ol>"
-        )
-        self.guide_label = QLabel(text)
-        self.guide_label.setWordWrap(True)
-        self.guide_label.setOpenExternalLinks(True)
-        layout.addWidget(self.guide_label)
-
-        # Health Checklist Group
-        self.checklist_group = QGroupBox("Health Checklist")
+        # ── Dev-only health checklist ─────────────────────────────────
+        self.checklist_group = QGroupBox("Development environment")
         checklist_layout = QVBoxLayout()
-
-        self.status_link = QLabel("Plugin Link Status: Checking...")
-        self.status_uv = QLabel("uv Installation: Checking...")
-        self.status_venv = QLabel("Python Venv Ready: Checking...")
-        self.status_entry = QLabel("MCP Server Entry Point: Checking...")
-
-        checklist_layout.addWidget(self.status_link)
-        checklist_layout.addWidget(self.status_uv)
-        checklist_layout.addWidget(self.status_venv)
-        checklist_layout.addWidget(self.status_entry)
-
-        # Checklist Buttons
-        check_btn_layout = QHBoxLayout()
-        self.refresh_check_btn = QPushButton("Refresh Checklist")
+        self.status_link = QLabel()
+        self.status_uv = QLabel()
+        self.status_venv = QLabel()
+        self.status_entry = QLabel()
+        for lbl in (self.status_link, self.status_uv, self.status_venv, self.status_entry):
+            checklist_layout.addWidget(lbl)
+        dev_btn_row = QHBoxLayout()
+        self.refresh_check_btn = QPushButton("Refresh")
         self.refresh_check_btn.clicked.connect(self.refresh_checklist)
-        check_btn_layout.addWidget(self.refresh_check_btn)
-
         self.setup_env_btn = QPushButton("Setup Environment")
+        self.setup_env_btn.setToolTip("Run 'uv sync' in the repository")
         self.setup_env_btn.clicked.connect(self.setup_environment)
-        self.setup_env_btn.setToolTip("Run 'uv sync' or 'pip install -e .' in the repository")
-        check_btn_layout.addWidget(self.setup_env_btn)
-
-        checklist_layout.addLayout(check_btn_layout)
+        self.relink_btn = QPushButton("Re-link Plugin")
+        self.relink_btn.clicked.connect(self.relink_plugin)
+        dev_btn_row.addWidget(self.refresh_check_btn)
+        dev_btn_row.addWidget(self.setup_env_btn)
+        dev_btn_row.addWidget(self.relink_btn)
+        checklist_layout.addLayout(dev_btn_row)
         self.checklist_group.setLayout(checklist_layout)
+        self.checklist_group.setVisible(self._is_dev_install())
         layout.addWidget(self.checklist_group)
 
-        self.relink_btn = QPushButton("Ensure Plugin is Linked (Symlink)")
-        self.relink_btn.clicked.connect(self.relink_plugin)
-        layout.addWidget(self.relink_btn)
+    def _is_dev_install(self):
+        """True when the plugin is running from a git-cloned repository."""
+        return (self.repo_dir / ".git").exists()
 
-        layout.addStretch()
+    def _find_uv(self):
+        """Return uv executable path, checking common Windows install locations."""
+        uv = shutil.which("uv")
+        if uv:
+            return uv
+        if sys.platform == "win32":
+            candidates = [
+                Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "WinGet" / "Links" / "uv.exe",
+                Path(os.environ.get("USERPROFILE", "")) / ".local" / "bin" / "uv.exe",
+                Path(os.environ.get("USERPROFILE", "")) / ".cargo" / "bin" / "uv.exe",
+            ]
+            for p in candidates:
+                if p.exists():
+                    return str(p)
+        return None
 
     def _get_qgis_plugins_dir(self):
         """Get the plugins directory for the currently active QGIS profile."""
@@ -2299,9 +3549,13 @@ class MCPConfiguratorDialog(QDialog):
                 try:
                     target.symlink_to(plugin_src, target_is_directory=True)
                 except OSError:
-                    subprocess.run(
-                        f'mklink /J "{target}" "{plugin_src}"', shell=True, check=True
+                    QgsMessageLog.logMessage(
+                        "Symlink requires Developer Mode or admin on Windows. "
+                        "Run 'python install.py' from the repository root instead.",
+                        "MCP",
+                        MSG_WARNING,
                     )
+                    return
             else:
                 target.symlink_to(plugin_src)
             QgsMessageLog.logMessage(f"Linked plugin: {target} -> {plugin_src}", "MCP", MSG_INFO)
@@ -2312,15 +3566,19 @@ class MCPConfiguratorDialog(QDialog):
     def refresh_checklist(self):
         """Update the health checklist labels."""
         # 1. Plugin Link Status
-        plugins_dir = self._get_qgis_plugins_dir()
-        target = plugins_dir / "qgis_mcp_plugin"
-        is_linked = target.is_symlink() and target.resolve() == (self.repo_dir / "qgis_mcp_plugin").resolve()
-        
-        self.status_link.setText(f"Plugin Link Status: {'✅ (linked)' if is_linked else '❌ (not linked)'}")
-        self.status_link.setStyleSheet(f"color: {'green' if is_linked else 'red'};")
+        if self._is_dev_install():
+            plugins_dir = self._get_qgis_plugins_dir()
+            target = plugins_dir / "qgis_mcp_plugin"
+            is_linked = target.is_symlink() and target.resolve() == (self.repo_dir / "qgis_mcp_plugin").resolve()
+            self.status_link.setText(f"Plugin Link Status: {'✅ (linked)' if is_linked else '❌ (not linked)'}")
+            self.status_link.setStyleSheet(f"color: {'green' if is_linked else 'red'};")
+            self.relink_btn.setVisible(True)
+        else:
+            self.status_link.setVisible(False)
+            self.relink_btn.setVisible(False)
 
         # 2. uv Installation
-        has_uv = bool(shutil.which("uv"))
+        has_uv = bool(self._find_uv())
         self.status_uv.setText(f"uv Installation: {'✅ (found)' if has_uv else '❌ (missing)'}")
         self.status_uv.setStyleSheet(f"color: {'green' if has_uv else 'red'};")
 
@@ -2339,9 +3597,9 @@ class MCPConfiguratorDialog(QDialog):
         if self.setup_process and self.setup_process.state() == QProcess.Running:
             return
 
-        has_uv = bool(shutil.which("uv"))
-        cmd = "uv" if has_uv else "pip"
-        args = ["sync"] if has_uv else ["install", "-e", "."]
+        uv = self._find_uv()
+        cmd = uv if uv else "pip"
+        args = ["sync"] if uv else ["install", "-e", "."]
 
         self.setup_env_btn.setEnabled(False)
         self.setup_env_btn.setText("Setting up...")
@@ -2375,105 +3633,35 @@ class MCPConfiguratorDialog(QDialog):
         self.refresh_checklist()
         self.setup_process = None
 
-    def init_config_tab(self):
-        layout = QVBoxLayout(self.config_tab)
+    def _on_client_changed(self):
+        self.refresh_status()
 
-        # Client selection
-        client_layout = QHBoxLayout()
-        client_layout.addWidget(QLabel("MCP Client:"))
-        self.client_combo = QComboBox()
-        self.client_combo.addItems(
-            ["claude-desktop", "cursor", "vscode", "windsurf", "zed", "claude-code"]
-        )
-        self.client_combo.currentTextChanged.connect(self.update_preview)
-        client_layout.addWidget(self.client_combo)
-        layout.addLayout(client_layout)
-
-        # Mode selection
-        mode_layout = QHBoxLayout()
-        mode_layout.addWidget(QLabel("Mode:"))
-        self.mode_combo = QComboBox()
-        self.mode_combo.addItems(["Local (uv run)", "Remote (uvx)"])
-        self.mode_combo.currentTextChanged.connect(self.update_preview)
-        mode_layout.addWidget(self.mode_combo)
-        layout.addLayout(mode_layout)
-
-        # Status Label
-        self.status_label = QLabel("Status: Unknown")
-        self.status_label.setStyleSheet("font-weight: bold;")
-        layout.addWidget(self.status_label)
-
-        # Preview
-        layout.addWidget(QLabel("Config Preview:"))
-        self.preview_edit = QPlainTextEdit()
-        self.preview_edit.setReadOnly(True)
-        # Use a fixed-width font for JSON
-        layout.addWidget(self.preview_edit)
-
-        # Buttons
-        h_btn_layout = QHBoxLayout()
-        self.refresh_btn = QPushButton("Refresh Status")
-        self.refresh_btn.clicked.connect(self.refresh_status)
-        h_btn_layout.addWidget(self.refresh_btn)
-
-        self.config_btn = QPushButton("Configure")
-        self.config_btn.clicked.connect(self.run_config)
-        self.config_btn.setStyleSheet(
-            "background-color: #4CAF50; color: white; font-weight: bold;"
-        )
-        h_btn_layout.addWidget(self.config_btn)
-        layout.addLayout(h_btn_layout)
+    def _copy_preview(self):
+        QgsApplication.clipboard().setText(self.preview_edit.toPlainText())
+        self.copy_btn.setText("Copied!")
+        QTimer.singleShot(1500, lambda: self.copy_btn.setText("Copy"))
 
     def _get_client_info(self, client_name):
-        home = Path.home()
-        appdata = (
-            Path(os.environ.get("APPDATA", home / "AppData" / "Roaming"))
-            if sys.platform == "win32"
-            else None
-        )
+        return _client_config_registry(self.repo_dir).get(client_name)
 
-        if sys.platform == "darwin":
-            claude_cfg = (
-                home / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
-            )
-        elif sys.platform == "win32":
-            claude_cfg = appdata / "Claude" / "claude_desktop_config.json"
-        else:
-            claude_cfg = home / ".config" / "Claude" / "claude_desktop_config.json"
-
-        cursor_cfg = home / ".cursor" / "mcp.json"
-        windsurf_cfg = home / ".windsurf" / "mcp.json"
-        vscode_cfg = self.repo_dir / ".vscode" / "mcp.json"
-
-        if sys.platform == "darwin":
-            zed_cfg = home / ".config" / "zed" / "settings.json"
-        elif sys.platform == "win32":
-            zed_cfg = appdata / "Zed" / "settings.json"
-        else:
-            zed_cfg = home / ".config" / "zed" / "settings.json"
-
-        registry = {
-            "claude-desktop": {"path": claude_cfg, "key": "mcpServers"},
-            "cursor": {"path": cursor_cfg, "key": "mcpServers"},
-            "vscode": {"path": vscode_cfg, "key": "mcpServers", "project_local": True},
-            "windsurf": {"path": windsurf_cfg, "key": "mcpServers"},
-            "zed": {"path": zed_cfg, "key": "context_servers"},
-            "claude-code": {"print_only": True},
-        }
-        return registry.get(client_name)
-
-    def _get_server_entry(self, client, remote):
+    def _get_server_entry(self, client, remote, refresh=False):
         if remote:
+            args = ["--from", self.github_url, "qgis-mcp-server"]
+            if refresh:
+                args = ["--refresh-package", "qgis-mcp", *args]
             entry = {
                 "command": "uvx",
-                "args": ["--from", self.github_url, "qgis-mcp-server"],
+                "args": args,
             }
         else:
-            if shutil.which("uv"):
+            uv = self._find_uv()
+            if uv:
                 entry = {
-                    "command": "uv",
-                    "args": ["run", "--no-sync", "src/qgis_mcp/server.py"],
-                    "cwd": str(self.repo_dir),
+                    "command": uv,
+                    "args": [
+                        "--directory", str(self.repo_dir),
+                        "run", "--no-sync", "src/qgis_mcp/server.py",
+                    ],
                 }
             else:
                 if sys.platform == "win32":
@@ -2498,25 +3686,28 @@ class MCPConfiguratorDialog(QDialog):
 
     def update_preview(self):
         client = self.client_combo.currentText()
-        remote = self.mode_combo.currentText() == "Remote (uvx)"
+        remote = self.mode_combo.currentText().startswith("Remote")
+        refresh = remote and self.refresh_check.isChecked()
+        # Refresh only applies to remote (uvx) mode.
+        self.refresh_check.setEnabled(remote)
         info = self._get_client_info(client)
 
         if info.get("print_only"):
             if remote:
-                cmd = f'claude mcp add qgis -- uvx --from "{self.github_url}" qgis-mcp-server'
-            elif shutil.which("uv"):
-                cmd = f'cd "{self.repo_dir}" && claude mcp add qgis -- uv run --no-sync src/qgis_mcp/server.py'
+                refresh_flag = "--refresh-package qgis-mcp " if refresh else ""
+                cmd = f'claude mcp add qgis -- uvx {refresh_flag}--from "{self.github_url}" qgis-mcp-server'
             else:
-                py = (
-                    "Scripts\\python.exe" if sys.platform == "win32" else "bin/python"
+                uv = self._find_uv() or "uv"
+                cmd = (
+                    f'claude mcp add -s user qgis -- '
+                    f'"{uv}" --directory "{self.repo_dir}" run --no-sync src/qgis_mcp/server.py'
                 )
-                python = self.repo_dir / ".venv" / py
-                server = self.repo_dir / "src/qgis_mcp/server.py"
-                cmd = f'claude mcp add qgis -- "{python}" "{server}"'
-            self.preview_edit.setPlainText(f"Run this command in your terminal:\n\n{cmd}")
+            self.preview_label.setText("Run this command in your terminal:")
+            self.preview_edit.setPlainText(cmd)
             return
 
-        entry = self._get_server_entry(client, remote)
+        self.preview_label.setText("Add to your client config file:")
+        entry = self._get_server_entry(client, remote, refresh)
         self.preview_edit.setPlainText(json.dumps({"qgis": entry}, indent=2))
 
     def refresh_status(self):
@@ -2524,10 +3715,13 @@ class MCPConfiguratorDialog(QDialog):
         info = self._get_client_info(client)
 
         if info.get("print_only"):
-            self.status_label.setText("Status: N/A (Manual command)")
+            self.status_label.setText("Run the command above in your terminal.")
             self.status_label.setStyleSheet("color: gray;")
+            self.apply_btn.setEnabled(False)
             self.update_preview()
             return
+
+        self.apply_btn.setEnabled(True)
 
         path = info["path"]
         key = info["key"]
@@ -2553,7 +3747,8 @@ class MCPConfiguratorDialog(QDialog):
 
     def run_config(self):
         client = self.client_combo.currentText()
-        remote = self.mode_combo.currentText() == "Remote (uvx)"
+        remote = self.mode_combo.currentText().startswith("Remote")
+        refresh = remote and self.refresh_check.isChecked()
         info = self._get_client_info(client)
 
         if info.get("print_only"):
@@ -2561,7 +3756,7 @@ class MCPConfiguratorDialog(QDialog):
 
         path = info["path"]
         key = info["key"]
-        entry = self._get_server_entry(client, remote)
+        entry = self._get_server_entry(client, remote, refresh)
 
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -2648,9 +3843,14 @@ class QgisMCPPlugin:
         autostart_wa = QWidgetAction(self.iface.mainWindow())
         autostart_wa.setDefaultWidget(autostart_widget)
 
+        configure_action = QAction("Configure…", self.iface.mainWindow())
+        configure_action.triggered.connect(self._show_help)
+
         menu = QMenu()
         menu.addAction(port_wa)
         menu.addAction(autostart_wa)
+        menu.addSeparator()
+        menu.addAction(configure_action)
 
         # Tool button with dropdown (like Plugin Reloader)
         self.tool_button = QToolButton()
@@ -2660,11 +3860,17 @@ class QgisMCPPlugin:
         self.tool_button.setToolButtonStyle(TOOLBUTTON_ICON_ONLY)
         self._toolbar_action = toolbar.addWidget(self.tool_button)
 
-        self.help_action = QAction("MCP Setup & Configurator", self.iface.mainWindow())
+        self.help_action = QAction(self._logo_icon(), "MCP Setup Configurator", self.iface.mainWindow())
         self.help_action.triggered.connect(self._show_help)
 
         self.iface.addPluginToMenu("QGIS MCP", self.action)
         self.iface.addPluginToMenu("QGIS MCP", self.help_action)
+
+        # Set the icon on the "QGIS MCP" submenu itself (top-level entry)
+        for sub in self.iface.pluginMenu().actions():
+            if sub.text() == "QGIS MCP" and sub.menu():
+                sub.setIcon(self._logo_icon())
+                break
 
         # Restore saved port
         saved_port = settings.value(f"{self.SETTINGS_PREFIX}/port", _DEFAULT_PORT, type=int)
@@ -2677,32 +3883,59 @@ class QgisMCPPlugin:
 
         # Proactive Welcome / Setup check
         QTimer.singleShot(1000, self._proactive_setup_check)
+        QTimer.singleShot(1500, self._check_stale_mcp_configs)
 
     def _proactive_setup_check(self):
-        """Check if setup is needed and show a welcome message."""
+        """Show a welcome dialog on first install."""
         settings = QgsSettings()
         first_run = settings.value(f"{self.SETTINGS_PREFIX}/first_run", True, type=bool)
-        
-        # Check link status
-        repo_dir = Path(__file__).resolve().parent.parent
-        plugins_dir = Path(QgsApplication.qgisSettingsDirPath()) / "python" / "plugins"
-        target = plugins_dir / "qgis_mcp_plugin"
-        is_linked = target.is_symlink() and target.resolve() == (repo_dir / "qgis_mcp_plugin").resolve()
+        if not first_run:
+            return
+        settings.setValue(f"{self.SETTINGS_PREFIX}/first_run", False)
 
-        if first_run or not is_linked:
-            msg = "Welcome to QGIS MCP! It looks like you might need to complete the setup."
-            if not is_linked:
-                msg = "QGIS MCP plugin is not linked to your repository. Some features might not work."
-            
-            self.iface.messageBar().pushMessage(
-                "QGIS MCP",
-                f"{msg} Open the 'MCP Setup & Configurator' to get started.",
-                level=Qgis.Info,
-                duration=10
-            )
-            
-            if first_run:
-                settings.setValue(f"{self.SETTINGS_PREFIX}/first_run", False)
+        dlg = QDialog(self.iface.mainWindow())
+        dlg.setWindowTitle("Welcome to QGIS MCP")
+        dlg.setMinimumWidth(420)
+        layout = QVBoxLayout(dlg)
+
+        title = QLabel("<h2>QGIS MCP installed!</h2>")
+        layout.addWidget(title)
+
+        body = QLabel(
+            "<p>This plugin lets Claude (and other LLMs) control QGIS directly "
+            "via the Model Context Protocol.</p>"
+            "<p><b>Quick start:</b></p>"
+            "<ol>"
+            "<li>Click the MCP toolbar icon → <b>Start Server</b></li>"
+            "<li>Open <b>Configure…</b> in the same menu to connect your AI client</li>"
+            "<li>Ask Claude to work with your QGIS project</li>"
+            "</ol>"
+        )
+        body.setWordWrap(True)
+        body.setOpenExternalLinks(True)
+        layout.addWidget(body)
+
+        layout.addStretch()
+
+        btn_layout = QHBoxLayout()
+        github_btn = QPushButton("Open GitHub")
+        github_btn.clicked.connect(
+            lambda: QDesktopServices.openUrl(QUrl("https://github.com/nkarasiak/qgis-mcp"))
+        )
+        configure_btn = QPushButton("Open Configurator")
+        configure_btn.clicked.connect(dlg.accept)
+        configure_btn.clicked.connect(self._show_help)
+        configure_btn.setDefault(True)
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dlg.reject)
+
+        btn_layout.addWidget(github_btn)
+        btn_layout.addStretch()
+        btn_layout.addWidget(close_btn)
+        btn_layout.addWidget(configure_btn)
+        layout.addLayout(btn_layout)
+
+        dlg.exec()
 
     def _save_autostart(self, checked):
         """Persist auto-start preference."""
@@ -2721,6 +3954,77 @@ class QgisMCPPlugin:
         """Show the MCP Setup & Configurator dialog."""
         dlg = MCPConfiguratorDialog(self.iface, self.iface.mainWindow())
         dlg.exec()
+
+    def _check_stale_mcp_configs(self):
+        """Offer (once) to add --refresh-package to existing no-refresh uvx configs.
+
+        Old users who configured before --refresh-package existed have a cached
+        uvx checkout that never auto-updates. Detect those entries and offer a
+        one-click rewrite so the server stays in sync with the plugin.
+        """
+        settings = QgsSettings()
+        if settings.value(f"{self.SETTINGS_PREFIX}/refresh_migration_prompted", False, type=bool):
+            return
+
+        repo_dir = Path(__file__).resolve().parent.parent
+        stale = []  # (client, path, key, data)
+        for client, info in _client_config_registry(repo_dir).items():
+            if info.get("print_only"):
+                continue
+            path = info["path"]
+            if not path.exists():
+                continue
+            try:
+                with open(path, encoding="utf-8") as f:
+                    data = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                continue
+            entry = data.get(info["key"], {}).get("qgis")
+            if _qgis_entry_is_stale(entry):
+                stale.append((client, path, info["key"], data))
+
+        if not stale:
+            return  # nothing to migrate — stay silent
+
+        # Prompt once, regardless of choice.
+        settings.setValue(f"{self.SETTINGS_PREFIX}/refresh_migration_prompted", True)
+
+        clients = ", ".join(sorted({c for c, *_ in stale}))
+        box = QMessageBox(self.iface.mainWindow())
+        box.setWindowTitle("QGIS MCP — keep server up to date?")
+        box.setIcon(QMessageBox.Question)
+        box.setText(
+            f"Your MCP config for {clients} pins a cached version of the server "
+            "that does not auto-update."
+        )
+        box.setInformativeText(
+            "Add '--refresh-package qgis-mcp' so it re-pulls the latest from GitHub "
+            "on each launch (stays in sync with this plugin; ~1–3s slower start). "
+            "Restart your AI client afterwards to take effect."
+        )
+        update_btn = box.addButton("Update configs", QMessageBox.AcceptRole)
+        box.addButton("Not now", QMessageBox.RejectRole)
+        box.exec()
+
+        if box.clickedButton() is not update_btn:
+            return
+
+        updated = []
+        for client, path, key, data in stale:
+            _add_refresh_to_entry(data[key]["qgis"])
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2)
+                    f.write("\n")
+                updated.append(client)
+            except OSError as e:
+                QgsMessageLog.logMessage(
+                    f"Failed to update {client} config: {e}", "MCP", MSG_CRITICAL
+                )
+        if updated:
+            QgsMessageLog.logMessage(
+                f"Added --refresh-package to configs: {', '.join(updated)}", "MCP", MSG_INFO
+            )
 
     def toggle_server(self, checked):
         if checked:

@@ -325,7 +325,7 @@ def cached_resource(cache_id: str) -> str:
 
 
 # ===========================================================================
-# MCP TOOLS (51 total)
+# MCP TOOLS (52 total)
 # ===========================================================================
 
 # --- Connectivity & Info ---
@@ -516,10 +516,10 @@ async def zoom_to_layer(ctx: Context, layer_id: str) -> dict:
 @mcp.tool(
     title="Get Layer Features",
     annotations=ToolAnnotations(readOnlyHint=True),
-    description="Retrieve features from a vector layer. Features are flat dicts with _fid and attributes "
-    "at top level. Supports expression filtering (QGIS expressions like "
-    '"name = \'Berlin\'" or "population > 1000000"), limit (max 50, default 10), offset for paging, '
-    "and optional geometry inclusion (in _geometry key).",
+    description="Get features from a vector layer. Flat dicts: _fid + attributes at top level. "
+    "expression filter (QGIS, e.g. "
+    '"name = \'Berlin\'", "population > 1000000"), limit (max 50, default 10), offset for paging, '
+    "optional geometry in _geometry key.",
     structured_output=True,
 )
 async def get_layer_features(
@@ -654,10 +654,10 @@ async def clear_selection(ctx: Context, layer_id: str) -> dict:
 
 @mcp.tool(
     title="Set Layer Style",
-    description="Set layer symbology. style_type: 'single' (one symbol), 'categorized' (unique values), "
-    "or 'graduated' (numeric ranges). field is required for categorized/graduated. "
-    "color_ramp: name from QGIS style (e.g. 'Spectral', 'Viridis', 'Blues'). "
-    "classes: number of classes for graduated (default 5).",
+    description="Set symbology. style_type: 'single' (one symbol), 'categorized' (unique values), "
+    "'graduated' (numeric ranges). field required for categorized/graduated. "
+    "color_ramp: QGIS ramp name (e.g. 'Spectral', 'Viridis', 'Blues'). "
+    "classes: graduated class count (default 5).",
 )
 async def set_layer_style(
     ctx: Context,
@@ -783,6 +783,287 @@ async def list_processing_algorithms(
 )
 async def get_algorithm_help(ctx: Context, algorithm_id: str) -> dict[str, Any]:
     return await _send("get_algorithm_help", {"algorithm_id": algorithm_id})
+
+
+@mcp.tool(
+    title="Create Processing Model",
+    description=(
+        "Build QGIS Processing Model (.model3) from structured spec; save to user models folder, "
+        "register in Processing Toolbox. Only call needed: algorithm discovery + param validation "
+        "run in the plugin against the live registry, so do NOT call list_processing_algorithms "
+        "or get_algorithm_help first. Pass keyword ('buffer') or full id ('native:buffer'); "
+        "handler resolves it. Ambiguous hint returns candidate list to refine and retry. Bad "
+        "param/output names reported with the valid set.\n\n"
+        "Spec:\n"
+        "  inputs: [{name, type, description?, default?, optional?, parent_layer? (for field/distance), "
+        "options? (for enum)}]. Types: vector, feature_source, raster, field, number, integer, "
+        "distance, string, boolean, extent, crs, point, file, folder, enum, multiple_layers.\n"
+        "  steps: [{id, algorithm, description?, parameters: {ALG_PARAM: value}}]. algorithm = "
+        "keyword or full id. Param values:\n"
+        "    '@input_name'     = model input value\n"
+        "    '$step_id.OUTPUT' = earlier step output\n"
+        "    '=expression'     = QGIS expression at run time\n"
+        "    else              = static literal (number/bool/string/list)\n"
+        "  outputs: [{name, from_step, from_output, description?}] = exposed outputs; omit to "
+        "expose the last step OUTPUT as 'Result'.\n\n"
+        "Name collision appends a suffix (name_2.model3, ...). Response returns the actual "
+        "'name', the 'requested_name', and 'resolved_steps' (which algorithm each hint mapped to)."
+    ),
+    structured_output=True,
+)
+async def create_processing_model(
+    ctx: Context,
+    name: str,
+    steps: list[dict],
+    inputs: list[dict] | None = None,
+    outputs: list[dict] | None = None,
+    description: str = "",
+    group: str = "Models",
+) -> dict[str, Any]:
+    await ctx.info(f"Building Processing model: {name} ({len(steps)} step(s))")
+    params: dict[str, Any] = {
+        "name": name,
+        "steps": steps,
+        "description": description,
+        "group": group,
+    }
+    if inputs is not None:
+        params["inputs"] = inputs
+    if outputs is not None:
+        params["outputs"] = outputs
+    return await _send("create_processing_model", params, timeout=TIMEOUT_LONG)
+
+
+@mcp.tool(
+    title="List Processing Models",
+    annotations=ToolAnnotations(readOnlyHint=True),
+    description="List registered Processing models (the 'model' provider). "
+    "Returns id, name, group for each. Use run_model to execute one.",
+    structured_output=True,
+)
+async def list_processing_models(ctx: Context) -> dict[str, Any]:
+    return await _send("list_processing_models")
+
+
+@mcp.tool(
+    title="Run Model",
+    description="Run a Processing model by registered id (e.g. 'model:myflow') or by a "
+    ".model3 file path. 'parameters' maps the model's input names to values "
+    "(layer ids/paths, numbers, etc.).",
+)
+async def run_model(ctx: Context, model: str, parameters: dict | None = None) -> dict:
+    await ctx.info(f"Running model: {model}")
+    await ctx.report_progress(0, 100)
+    result = await _send(
+        "run_model", {"model": model, "parameters": parameters or {}}, timeout=TIMEOUT_LONG
+    )
+    await ctx.report_progress(100, 100)
+    return result
+
+
+@mcp.tool(
+    title="Get Processing Providers",
+    annotations=ToolAnnotations(readOnlyHint=True),
+    description="List Processing providers (native, gdal, grass, saga, model, ...) with "
+    "algorithm counts and active status. Use to diagnose missing algorithms.",
+    structured_output=True,
+)
+async def get_processing_providers(ctx: Context) -> dict[str, Any]:
+    return await _send("get_processing_providers")
+
+
+@mcp.tool(
+    title="Execute Processing Batch",
+    description="Run one algorithm once per parameter dict in 'parameters_list'. "
+    "Returns a per-run result with index and success/error status. Use for applying "
+    "the same operation over many inputs in a single round-trip.",
+)
+async def execute_processing_batch(
+    ctx: Context, algorithm: str, parameters_list: list[dict]
+) -> dict:
+    await ctx.info(f"Batch processing {algorithm}: {len(parameters_list)} run(s)")
+    return await _send(
+        "execute_processing_batch",
+        {"algorithm": algorithm, "parameters_list": parameters_list},
+        timeout=TIMEOUT_LONG,
+    )
+
+
+# --- Raster compute ---
+
+
+@mcp.tool(
+    title="Raster Calculator",
+    description="Band math via the QGIS raster calculator. Reference loaded raster layers "
+    "in the expression as 'LayerName@band' (e.g. '(\"dem@1\" > 1000) * 1'). Writes a GeoTIFF "
+    "to output_path. Output grid/extent taken from reference_layer (layer id or name), "
+    "defaulting to the first loaded raster.",
+)
+async def raster_calculator(
+    ctx: Context, expression: str, output_path: str, reference_layer: str | None = None
+) -> dict:
+    await ctx.info("Computing raster expression...")
+    return await _send(
+        "raster_calculator",
+        {"expression": expression, "output_path": output_path, "reference_layer": reference_layer},
+        timeout=TIMEOUT_LONG,
+    )
+
+
+@mcp.tool(
+    title="Zonal Statistics",
+    description="Per-polygon stats from a raster (native:zonalstatisticsfb). "
+    "stats int codes: 0=count 1=sum 2=mean 3=median 4=stdev 5=min 6=max "
+    "7=range 8=minority 9=majority 10=variety 11=variance (default [0,1,2]). New columns "
+    "prefixed by 'prefix'. No output_path = in-memory layer.",
+)
+async def zonal_statistics(
+    ctx: Context,
+    polygon_layer: str,
+    raster_layer: str,
+    band: int = 1,
+    prefix: str = "_",
+    stats: list[int] | None = None,
+    output_path: str | None = None,
+) -> dict:
+    await ctx.info("Computing zonal statistics...")
+    return await _send(
+        "zonal_statistics",
+        {
+            "polygon_layer": polygon_layer,
+            "raster_layer": raster_layer,
+            "band": band,
+            "prefix": prefix,
+            "stats": stats,
+            "output_path": output_path,
+        },
+        timeout=TIMEOUT_LONG,
+    )
+
+
+@mcp.tool(
+    title="Sample Raster Values",
+    annotations=ToolAnnotations(readOnlyHint=True),
+    description="Sample raster pixel values at points. 'points' is a list of [x, y] in the "
+    "raster's CRS. Omit 'band' to sample all bands. Use transform_coordinates first if your "
+    "points are in a different CRS.",
+)
+async def sample_raster_values(
+    ctx: Context, raster_layer: str, points: list[list[float]], band: int | None = None
+) -> dict[str, Any]:
+    return await _send(
+        "sample_raster_values",
+        {"raster_layer": raster_layer, "points": points, "band": band},
+    )
+
+
+# --- Export ---
+
+
+@mcp.tool(
+    title="Export Layer",
+    annotations=ToolAnnotations(idempotentHint=True),
+    description="Export vector/raster to disk; format from output_path extension "
+    "(.gpkg, .shp, .geojson, .tif, ...). target_crs (e.g. 'EPSG:4326') reprojects on export. "
+    "filter_expression (vector only) exports a subset matching a QGIS expression.",
+)
+async def export_layer(
+    ctx: Context,
+    layer_id: str,
+    output_path: str,
+    target_crs: str | None = None,
+    filter_expression: str | None = None,
+) -> dict:
+    await ctx.info(f"Exporting layer to {output_path}")
+    return await _send(
+        "export_layer",
+        {
+            "layer_id": layer_id,
+            "output_path": output_path,
+            "target_crs": target_crs,
+            "filter_expression": filter_expression,
+        },
+        timeout=TIMEOUT_LONG,
+    )
+
+
+# --- Vector analysis ---
+
+
+@mcp.tool(
+    title="Field Calculator",
+    description="Add (if missing) + populate a field from a QGIS expression, per feature, in-place. "
+    "field_type: string|int|double|bool|date|datetime (default double). "
+    "Example: expression='$area', field_name='area_m2'. Returns updated feature count.",
+)
+async def field_calculator(
+    ctx: Context,
+    layer_id: str,
+    field_name: str,
+    expression: str,
+    field_type: str = "double",
+    length: int = 0,
+    precision: int = 0,
+) -> dict:
+    return await _send(
+        "field_calculator",
+        {
+            "layer_id": layer_id,
+            "field_name": field_name,
+            "expression": expression,
+            "field_type": field_type,
+            "length": length,
+            "precision": precision,
+        },
+    )
+
+
+@mcp.tool(
+    title="Get Unique Values",
+    annotations=ToolAnnotations(readOnlyHint=True),
+    description="Return the distinct values of a field. Use 'limit' to cap results "
+    "(-1 for all). Useful before building categorized symbology or filters.",
+)
+async def get_unique_values(
+    ctx: Context, layer_id: str, field: str, limit: int = 1000
+) -> dict[str, Any]:
+    return await _send(
+        "get_unique_values", {"layer_id": layer_id, "field": field, "limit": limit}
+    )
+
+
+@mcp.tool(
+    title="Spatial Join",
+    description="Join attributes by location (native:joinattributesbylocation). "
+    "predicates int list: 0=intersects 1=contains 2=equals 3=touches 4=overlaps "
+    "5=within 6=crosses (default [0]). method: 0=one-to-many 1=first match (default) "
+    "2=largest overlap. join_fields = copied columns (default all). "
+    "No output_path = in-memory layer.",
+)
+async def spatial_join(
+    ctx: Context,
+    target_layer: str,
+    join_layer: str,
+    predicates: list[int] | None = None,
+    join_fields: list[str] | None = None,
+    method: int = 1,
+    prefix: str = "",
+    output_path: str | None = None,
+) -> dict:
+    await ctx.info("Joining attributes by location...")
+    return await _send(
+        "spatial_join",
+        {
+            "target_layer": target_layer,
+            "join_layer": join_layer,
+            "predicates": predicates,
+            "join_fields": join_fields,
+            "method": method,
+            "prefix": prefix,
+            "output_path": output_path,
+        },
+        timeout=TIMEOUT_LONG,
+    )
 
 
 # --- Rendering ---
@@ -1271,9 +1552,9 @@ async def set_setting(ctx: Context, key: str, value: str) -> dict:
 @mcp.tool(
     title="Transform Coordinates",
     annotations=ToolAnnotations(readOnlyHint=True),
-    description="Transform coordinates between CRS. Accepts a single point {x, y}, "
-    "a list of points [{x, y}, ...], or a bbox {xmin, ymin, xmax, ymax}. "
-    "Returns transformed coordinates in the same format.",
+    description="Transform coordinates between CRS. Accepts a point {x, y}, "
+    "a point list [{x, y}, ...], or a bbox {xmin, ymin, xmax, ymax}. "
+    "Returns the same format.",
     structured_output=True,
 )
 async def transform_coordinates(
@@ -1444,6 +1725,317 @@ async def add_layout_map(
     )
 
 
+@mcp.tool(
+    title="Get Layout Info",
+    annotations=ToolAnnotations(readOnlyHint=True),
+    description="List items in a print layout (type, id, uuid, position, size) and page count.",
+    structured_output=True,
+)
+async def get_layout_info(ctx: Context, layout_name: str) -> dict[str, Any]:
+    return await _send("get_layout_info", {"layout_name": layout_name})
+
+
+@mcp.tool(
+    title="Add Layout Label",
+    description="Add a text label to a print layout (mm). text may contain [% expression %] "
+    "for dynamic content. color is hex (e.g. '#000000').",
+)
+async def add_layout_label(
+    ctx: Context,
+    layout_name: str,
+    text: str,
+    x: float = 10,
+    y: float = 10,
+    width: float = 100,
+    height: float = 20,
+    font_size: int = 12,
+    color: str = "#000000",
+) -> dict:
+    return await _send(
+        "add_layout_label",
+        {
+            "layout_name": layout_name,
+            "text": text,
+            "x": x,
+            "y": y,
+            "width": width,
+            "height": height,
+            "font_size": font_size,
+            "color": color,
+        },
+    )
+
+
+@mcp.tool(
+    title="Add Layout Legend",
+    description="Add a legend to a print layout, linked to a map item (defaults to the first "
+    "map item). Position/size in mm.",
+)
+async def add_layout_legend(
+    ctx: Context,
+    layout_name: str,
+    map_item_id: str | None = None,
+    x: float = 10,
+    y: float = 10,
+    width: float = 80,
+    height: float = 100,
+    title: str = "Legend",
+) -> dict:
+    return await _send(
+        "add_layout_legend",
+        {
+            "layout_name": layout_name,
+            "map_item_id": map_item_id,
+            "x": x,
+            "y": y,
+            "width": width,
+            "height": height,
+            "title": title,
+        },
+    )
+
+
+@mcp.tool(
+    title="Add Layout Scale Bar",
+    description="Add a scale bar to a print layout, linked to a map item. style e.g. "
+    "'Single Box', 'Double Box', 'Line Ticks Up', 'Numeric'.",
+)
+async def add_layout_scalebar(
+    ctx: Context,
+    layout_name: str,
+    map_item_id: str | None = None,
+    x: float = 10,
+    y: float = 180,
+    width: float = 80,
+    height: float = 20,
+    style: str = "Single Box",
+) -> dict:
+    return await _send(
+        "add_layout_scalebar",
+        {
+            "layout_name": layout_name,
+            "map_item_id": map_item_id,
+            "x": x,
+            "y": y,
+            "width": width,
+            "height": height,
+            "style": style,
+        },
+    )
+
+
+@mcp.tool(
+    title="Add Layout Picture",
+    description="Add a picture or SVG (logo, north arrow) to a print layout. path is an image "
+    "or SVG file path. Position/size in mm.",
+)
+async def add_layout_picture(
+    ctx: Context,
+    layout_name: str,
+    path: str,
+    x: float = 10,
+    y: float = 10,
+    width: float = 30,
+    height: float = 30,
+) -> dict:
+    return await _send(
+        "add_layout_picture",
+        {
+            "layout_name": layout_name,
+            "path": path,
+            "x": x,
+            "y": y,
+            "width": width,
+            "height": height,
+        },
+    )
+
+
+@mcp.tool(
+    title="Add Layout Table",
+    description="Add an attribute table for a vector layer to a print layout. "
+    "max_rows caps the number of features shown. Position/size in mm.",
+)
+async def add_layout_table(
+    ctx: Context,
+    layout_name: str,
+    layer_id: str,
+    x: float = 10,
+    y: float = 10,
+    width: float = 180,
+    height: float = 80,
+    max_rows: int = 20,
+) -> dict:
+    return await _send(
+        "add_layout_table",
+        {
+            "layout_name": layout_name,
+            "layer_id": layer_id,
+            "x": x,
+            "y": y,
+            "width": width,
+            "height": height,
+            "max_rows": max_rows,
+        },
+    )
+
+
+@mcp.tool(
+    title="Configure Atlas",
+    description="Configure a print layout's atlas: coverage_layer (vector layer id) drives one "
+    "page per feature. Optional page_name_expression, filter_expression, sort_expression.",
+)
+async def configure_atlas(
+    ctx: Context,
+    layout_name: str,
+    coverage_layer: str,
+    enabled: bool = True,
+    page_name_expression: str | None = None,
+    filter_expression: str | None = None,
+    sort_expression: str | None = None,
+) -> dict:
+    return await _send(
+        "configure_atlas",
+        {
+            "layout_name": layout_name,
+            "coverage_layer": coverage_layer,
+            "enabled": enabled,
+            "page_name_expression": page_name_expression,
+            "filter_expression": filter_expression,
+            "sort_expression": sort_expression,
+        },
+    )
+
+
+@mcp.tool(
+    title="Export Atlas",
+    annotations=ToolAnnotations(idempotentHint=True),
+    description="Export a configured atlas. format 'pdf' writes a single multi-page file at "
+    "output_path; image formats ('png','jpg','tif') write one file per feature into the "
+    "output_path directory. Call configure_atlas first.",
+)
+async def export_atlas(
+    ctx: Context,
+    layout_name: str,
+    output_path: str,
+    format: str = "pdf",
+    dpi: int = 300,
+) -> dict:
+    await ctx.info(f"Exporting atlas '{layout_name}' as {format} to {output_path}")
+    return await _send(
+        "export_atlas",
+        {
+            "layout_name": layout_name,
+            "output_path": output_path,
+            "format": format,
+            "dpi": dpi,
+        },
+        timeout=TIMEOUT_LONG,
+    )
+
+
+@mcp.tool(
+    title="Remove Layout",
+    annotations=ToolAnnotations(destructiveHint=True),
+    description="Remove a print layout from the project.",
+)
+async def remove_layout(ctx: Context, layout_name: str) -> dict:
+    if not await _confirm_destructive(ctx, f"Remove layout '{layout_name}'?"):
+        return {"ok": False, "message": "Cancelled by user"}
+    return await _send("remove_layout", {"layout_name": layout_name})
+
+
+@mcp.tool(
+    title="Execute SQL",
+    description="SQL across loaded layers via a virtual layer; reference layers by name in "
+    "FROM/JOIN. as_layer=True registers the result as a new layer (set geometry_field for "
+    "spatial output); else returns rows inline (max 1000). layers limits sources by layer id.",
+)
+async def execute_sql(
+    ctx: Context,
+    query: str,
+    layers: list[str] | None = None,
+    as_layer: bool = False,
+    layer_name: str = "sql_result",
+    geometry_field: str | None = None,
+    uid_field: str | None = None,
+) -> dict:
+    return await _send(
+        "execute_sql",
+        {
+            "query": query,
+            "layers": layers,
+            "as_layer": as_layer,
+            "layer_name": layer_name,
+            "geometry_field": geometry_field,
+            "uid_field": uid_field,
+        },
+        timeout=TIMEOUT_LONG,
+    )
+
+
+@mcp.tool(
+    title="Evaluate Expression",
+    annotations=ToolAnnotations(readOnlyHint=True),
+    description="Evaluate a standalone QGIS expression to a scalar value (e.g. "
+    "aggregate('layer','sum','field'), @project_var, now()). Optional layer_id adds layer "
+    "scope. Distinct from validate_expression (validate only) and field_calculator (per-feature).",
+)
+async def evaluate_expression(
+    ctx: Context, expression: str, layer_id: str | None = None
+) -> dict:
+    return await _send(
+        "evaluate_expression", {"expression": expression, "layer_id": layer_id}
+    )
+
+
+@mcp.tool(
+    title="Identify Features",
+    annotations=ToolAnnotations(readOnlyHint=True),
+    description="Identify features at a point [x, y] in project CRS across layers (map-click "
+    "analogue). tolerance (map units) expands the search; 0 = exact hit. layer_ids limits the "
+    "search (default: visible vector layers). limit caps features per layer.",
+)
+async def identify_features(
+    ctx: Context,
+    point: list[float],
+    tolerance: float = 0.0,
+    layer_ids: list[str] | None = None,
+    limit: int = 10,
+) -> dict:
+    return await _send(
+        "identify_features",
+        {
+            "point": point,
+            "tolerance": tolerance,
+            "layer_ids": layer_ids,
+            "limit": limit,
+        },
+    )
+
+
+@mcp.tool(
+    title="Duplicate Layer",
+    description="Duplicate a layer (including its style) under a new name.",
+)
+async def duplicate_layer(
+    ctx: Context, layer_id: str, new_name: str | None = None
+) -> dict:
+    return await _send(
+        "duplicate_layer", {"layer_id": layer_id, "new_name": new_name}
+    )
+
+
+@mcp.tool(
+    title="Set Layer Order",
+    annotations=ToolAnnotations(idempotentHint=True),
+    description="Set the explicit layer draw order in the tree. layer_ids is the ordered list "
+    "of layer ids from top (drawn last) to bottom.",
+)
+async def set_layer_order(ctx: Context, layer_ids: list[str]) -> dict:
+    return await _send("set_layer_order", {"layer_ids": layer_ids})
+
+
 # ---------------------------------------------------------------------------
 # Compound tool mode (opt-in via QGIS_MCP_TOOL_MODE=compound)
 # ---------------------------------------------------------------------------
@@ -1456,6 +2048,35 @@ if _tool_mode == "compound":
     mcp._tool_manager._tools.clear()
     register_compound_tools(mcp, _send, _confirm_destructive)
     logger.info(f"Compound tool mode: {len(mcp._tool_manager._tools)} tools registered")
+
+
+def _strip_schema_titles() -> None:
+    """Drop redundant auto-generated 'title' keys from tool input schemas.
+
+    Pydantic adds a display 'title' to the schema and every property (e.g. the
+    param ``layer_id`` gets ``"title": "Layer Id"``) that just restates the name.
+    It is sent to the client on every turn but carries no information, so removing
+    it trims ~2k tokens off the granular tool schema with no behavior change.
+    """
+
+    def clean(node: object) -> None:
+        if isinstance(node, dict):
+            node.pop("title", None)
+            for key in ("properties", "$defs", "definitions"):
+                for sub in node.get(key, {}).values():
+                    clean(sub)
+            for key in ("items", "additionalProperties"):
+                if isinstance(node.get(key), dict):
+                    clean(node[key])
+            for key in ("anyOf", "allOf", "oneOf"):
+                for sub in node.get(key, []):
+                    clean(sub)
+
+    for tool in mcp._tool_manager._tools.values():
+        clean(tool.parameters)
+
+
+_strip_schema_titles()
 
 
 # ===========================================================================
@@ -1582,18 +2203,21 @@ QGIS MCP connects QGIS Desktop to LLMs via the Model Context Protocol.
 - **Labeling**: get_layer_labeling, set_layer_labeling (field, font_size, color)
 - **Canvas**: get_canvas_extent, set_canvas_extent, get_canvas_screenshot, get_canvas_scale, set_canvas_scale
 - **Raster**: get_raster_info
-- **Processing**: execute_processing, list_processing_algorithms, get_algorithm_help
+- **Processing**: execute_processing, list_processing_algorithms, get_algorithm_help, create_processing_model
 - **Rendering**: render_map (re-render to image), get_canvas_screenshot (fast grab)
 - **Code**: execute_code (arbitrary PyQGIS)
 - **Batch**: batch_commands (multiple commands in one round-trip)
-- **Layouts**: list_layouts, export_layout, create_layout, add_layout_map
+- **Layouts**: list_layouts, export_layout, create_layout, add_layout_map, add_layout_label, add_layout_legend, add_layout_scalebar, add_layout_picture, add_layout_table, get_layout_info, remove_layout
+- **Atlas**: configure_atlas (coverage layer), export_atlas (one page per feature)
+- **Query**: execute_sql (SQL across layers via virtual layer), evaluate_expression (scalar/aggregate), identify_features (features at a point)
+- **Layer mgmt**: duplicate_layer, set_layer_order
 - **Logging**: get_message_log
 - **Plugins**: list_plugins, get_plugin_info, reload_plugin
 - **Layer Tree**: get_layer_tree, create_layer_group, move_layer_to_group
 - **Properties**: set_layer_property, get_layer_extent
 - **CRS**: get_layer_crs, set_layer_crs, transform_coordinates
 - **Variables**: get_project_variables, set_project_variable
-- **Expression**: validate_expression
+- **Expression**: validate_expression, evaluate_expression
 - **Settings**: get_setting, set_setting
 - **Bookmarks**: get_bookmarks, add_bookmark, remove_bookmark
 - **Map Themes**: get_map_themes, add_map_theme, remove_map_theme, apply_map_theme
@@ -1675,6 +2299,33 @@ def spatial_analysis_prompt(
             f"3. Check that CRS matches; if not, reproject one layer first\n"
             f"4. Use execute_processing with the appropriate algorithm (e.g. native:intersection, native:union)\n"
             f"5. Report the result layer's feature count and fields"
+        )
+    ]
+
+
+@mcp.prompt(
+    name="create_processing_model",
+    description="Translate a natural-language workflow description into a saved QGIS Processing Model",
+)
+def create_processing_model_prompt(description: str) -> list[UserMessage]:
+    return [
+        UserMessage(
+            content=(
+                "Build a QGIS Processing Model that implements this workflow:\n\n"
+                f"\"{description}\"\n\n"
+                "Call the `create_processing_model` tool ONCE. Algorithm lookup and parameter "
+                "validation happen inside the plugin against QGIS's Processing registry — do NOT "
+                "call `list_processing_algorithms` or `get_algorithm_help`. For each step pass a "
+                "concise `algorithm` keyword (e.g. 'buffer', 'centroids', 'clip') or a full id; "
+                "if a keyword is ambiguous the tool returns the candidate list so you can retry "
+                "with a more specific hint. Reference model inputs as '@name', earlier step "
+                "outputs as '$step_id.OUTPUT', and QGIS expressions as '=expr'. "
+                "The model is always saved into the QGIS user models folder and registered in the "
+                "Processing Toolbox; if the requested name is taken the tool appends a numeric "
+                "suffix and returns the actual filename used. "
+                "After the call, summarize the resolved_steps it returned and tell the user the "
+                "final model name so they can find it in the toolbox."
+            )
         )
     ]
 

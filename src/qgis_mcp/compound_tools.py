@@ -1,6 +1,6 @@
 """Compound tool registrations for QGIS MCP.
 
-When QGIS_MCP_TOOL_MODE=compound, these ~22 grouped tools replace the
+When QGIS_MCP_TOOL_MODE=compound, these ~23 grouped tools replace the
 granular tools, reducing context window overhead for LLMs with limited tool
 slots.
 
@@ -21,6 +21,18 @@ from qgis_mcp.helpers import (
     make_project_response,
     make_render_response,
 )
+
+
+# Map render-group layout actions to their underlying plugin commands.
+_LAYOUT_ITEM_COMMANDS = {
+    "add_map": "add_layout_map",
+    "add_label": "add_layout_label",
+    "add_legend": "add_layout_legend",
+    "add_scalebar": "add_layout_scalebar",
+    "add_picture": "add_layout_picture",
+    "add_table": "add_layout_table",
+    "configure_atlas": "configure_atlas",
+}
 
 
 def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
@@ -103,7 +115,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
             "Layer management.\n"
             "Actions: list, add_vector, add_raster, remove, find, create_memory, "
             "set_visibility, zoom_to, get_info, get_schema, get_extent, get_raster_info, "
-            "get_crs, set_crs, get_labeling, set_labeling\n"
+            "get_crs, set_crs, get_labeling, set_labeling, duplicate, set_order\n"
             "- list: limit (int, default 50), offset (int, default 0)\n"
             "- add_vector: path (str), provider (str, default 'ogr'), name (str, optional)\n"
             "- add_raster: path (str), provider (str, default 'gdal'), name (str, optional)\n"
@@ -121,7 +133,9 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
             "- set_crs: layer_id (str), crs (str)\n"
             "- get_labeling: layer_id (str)\n"
             "- set_labeling: layer_id (str), enabled (bool, default true), "
-            "field_name (str, optional), font_size (float, optional), color (str, optional)"
+            "field_name (str, optional), font_size (float, optional), color (str, optional)\n"
+            "- duplicate: layer_id (str), new_name (str, optional)\n"
+            "- set_order: layer_ids (list[str]) — top to bottom"
         ),
         annotations=ToolAnnotations(destructiveHint=True),
     )
@@ -198,6 +212,14 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
             if "color" in kwargs:
                 params["color"] = kwargs["color"]
             return await _send("set_layer_labeling", params)
+        elif action == "duplicate":
+            dup_params: dict[str, Any] = {"layer_id": kwargs["layer_id"]}
+            if "new_name" in kwargs:
+                dup_params["new_name"] = kwargs["new_name"]
+            result = await _send("duplicate_layer", dup_params)
+            return make_layer_response(result)
+        elif action == "set_order":
+            return await _send("set_layer_order", {"layer_ids": kwargs["layer_ids"]})
         else:
             raise ValueError(f"Unknown layer action: {action}")
 
@@ -392,13 +414,26 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
     @mcp.tool(
         title="Render",
         description=(
-            "Rendering and layout export.\n"
-            "Actions: map, export_layout, list_layouts\n"
+            "Rendering, layout authoring and atlas export.\n"
+            "Actions: map, list_layouts, create_layout, get_layout_info, remove_layout, "
+            "add_map, add_label, add_legend, add_scalebar, add_picture, add_table, "
+            "configure_atlas, export_layout, export_atlas\n"
             "- map: width (int, default 800), height (int, default 600), "
             "path (str, optional) — returns inline image\n"
-            "- export_layout: layout_name (str), path (str), format (str, default 'pdf'), "
-            "dpi (int, default 300)\n"
-            "- list_layouts: no params"
+            "- list_layouts: no params\n"
+            "- create_layout: name (str)\n"
+            "- get_layout_info: layout_name (str)\n"
+            "- remove_layout: layout_name (str) — destructive\n"
+            "- add_map: layout_name (str), x, y, width, height (float, mm)\n"
+            "- add_label: layout_name (str), text (str), x, y, width, height, font_size (int), color (hex)\n"
+            "- add_legend: layout_name (str), map_item_id (str, optional), x, y, width, height, title (str)\n"
+            "- add_scalebar: layout_name (str), map_item_id (str, optional), x, y, width, height, style (str)\n"
+            "- add_picture: layout_name (str), path (str), x, y, width, height\n"
+            "- add_table: layout_name (str), layer_id (str), x, y, width, height, max_rows (int)\n"
+            "- configure_atlas: layout_name (str), coverage_layer (str), enabled (bool), "
+            "page_name_expression/filter_expression/sort_expression (str, optional)\n"
+            "- export_layout: layout_name (str), path (str), format (str, default 'pdf'), dpi (int, default 300)\n"
+            "- export_atlas: layout_name (str), output_path (str), format (str, default 'pdf'), dpi (int, default 300)"
         ),
         annotations=ToolAnnotations(idempotentHint=True),
     )
@@ -416,6 +451,19 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
             result = await _send("render_map_base64", params, timeout=TIMEOUT_LONG)
             await ctx.report_progress(100, 100)
             return make_render_response(result, params["width"], params["height"], path)
+        elif action == "list_layouts":
+            return await _send("list_layouts")
+        elif action == "create_layout":
+            return await _send("create_layout", {"name": kwargs["name"]})
+        elif action == "get_layout_info":
+            return await _send("get_layout_info", {"layout_name": kwargs["layout_name"]})
+        elif action == "remove_layout":
+            name = kwargs["layout_name"]
+            if not await _confirm_destructive(ctx, f"Remove layout '{name}'?"):
+                return {"ok": False, "message": "Cancelled by user"}
+            return await _send("remove_layout", {"layout_name": name})
+        elif action in _LAYOUT_ITEM_COMMANDS:
+            return await _send(_LAYOUT_ITEM_COMMANDS[action], kwargs)
         elif action == "export_layout":
             return await _send(
                 "export_layout",
@@ -426,8 +474,18 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
                     "dpi": kwargs.get("dpi", 300),
                 },
             )
-        elif action == "list_layouts":
-            return await _send("list_layouts")
+        elif action == "export_atlas":
+            await ctx.info(f"Exporting atlas '{kwargs['layout_name']}'")
+            return await _send(
+                "export_atlas",
+                {
+                    "layout_name": kwargs["layout_name"],
+                    "output_path": kwargs["output_path"],
+                    "format": kwargs.get("format", "pdf"),
+                    "dpi": kwargs.get("dpi", 300),
+                },
+                timeout=TIMEOUT_LONG,
+            )
         else:
             raise ValueError(f"Unknown render action: {action}")
 
@@ -439,10 +497,15 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
         title="Processing",
         description=(
             "QGIS Processing framework.\n"
-            "Actions: execute, list_algorithms, get_help\n"
+            "Actions: execute, list_algorithms, get_help, create_model\n"
             "- execute: algorithm (str), parameters (dict)\n"
             "- list_algorithms: search (str, optional), provider (str, optional)\n"
-            "- get_help: algorithm_id (str)"
+            "- get_help: algorithm_id (str)\n"
+            "- create_model: name (str), steps (list[dict]), inputs (list[dict], optional), "
+            "outputs (list[dict], optional), description (str, optional), group (str, optional). "
+            "Step parameter values support '@input', '$step.OUTPUT', '=expression', or static literals. "
+            "The model is always saved into the QGIS user models folder and registered; a numeric "
+            "suffix is appended to the name on collision."
         ),
     )
     async def processing(ctx: Context, action: str, **kwargs) -> dict[str, Any]:
@@ -465,6 +528,20 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
             return await _send("list_processing_algorithms", params)
         elif action == "get_help":
             return await _send("get_algorithm_help", {"algorithm_id": kwargs["algorithm_id"]})
+        elif action == "create_model":
+            await ctx.info(
+                f"Building Processing model: {kwargs['name']} ({len(kwargs['steps'])} step(s))"
+            )
+            params = {
+                "name": kwargs["name"],
+                "steps": kwargs["steps"],
+                "description": kwargs.get("description", ""),
+                "group": kwargs.get("group", "Models"),
+            }
+            for key in ("inputs", "outputs"):
+                if key in kwargs and kwargs[key] is not None:
+                    params[key] = kwargs[key]
+            return await _send("create_processing_model", params, timeout=TIMEOUT_LONG)
         else:
             raise ValueError(f"Unknown processing action: {action}")
 
@@ -646,21 +723,51 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
     @mcp.tool(
         title="Expression",
         description=(
-            "Expression validation.\n"
-            "Actions: validate\n"
-            "- validate: expression (str), layer_id (str, optional)"
+            "Expression validation and evaluation.\n"
+            "Actions: validate, evaluate\n"
+            "- validate: expression (str), layer_id (str, optional)\n"
+            "- evaluate: expression (str), layer_id (str, optional) — returns scalar result"
         ),
         annotations=ToolAnnotations(readOnlyHint=True),
         structured_output=True,
     )
     async def expression(ctx: Context, action: str, **kwargs) -> dict[str, Any]:
-        if action == "validate":
+        if action in ("validate", "evaluate"):
             params = {"expression": kwargs["expression"]}
             if "layer_id" in kwargs:
                 params["layer_id"] = kwargs["layer_id"]
-            return await _send("validate_expression", params)
+            command = "validate_expression" if action == "validate" else "evaluate_expression"
+            return await _send(command, params)
         else:
             raise ValueError(f"Unknown expression action: {action}")
+
+    @mcp.tool(
+        title="Query",
+        description=(
+            "Cross-layer query.\n"
+            "Actions: sql, identify\n"
+            "- sql: query (str), layers (list[str], optional), as_layer (bool, default false), "
+            "layer_name (str), geometry_field (str, optional), uid_field (str, optional)\n"
+            "- identify: point (list[float] [x,y]), tolerance (float, default 0), "
+            "layer_ids (list[str], optional), limit (int, default 10)"
+        ),
+        annotations=ToolAnnotations(readOnlyHint=True),
+    )
+    async def query(ctx: Context, action: str, **kwargs) -> dict[str, Any]:
+        if action == "sql":
+            params: dict[str, Any] = {"query": kwargs["query"]}
+            for key in ("layers", "as_layer", "layer_name", "geometry_field", "uid_field"):
+                if key in kwargs:
+                    params[key] = kwargs[key]
+            return await _send("execute_sql", params, timeout=TIMEOUT_LONG)
+        elif action == "identify":
+            params = {"point": kwargs["point"]}
+            for key in ("tolerance", "layer_ids", "limit"):
+                if key in kwargs:
+                    params[key] = kwargs[key]
+            return await _send("identify_features", params)
+        else:
+            raise ValueError(f"Unknown query action: {action}")
 
     @mcp.tool(
         title="Transform",

@@ -12,14 +12,14 @@ about=Socket server plugin that exposes QGIS operations to LLMs through the
     See https://github.com/nkarasiak/qgis-mcp for installation instructions.
 
     Features:
-    - 51 MCP tools for layers, features, processing, rendering, layouts
+    - 100+ MCP tools for layers, features, processing, rendering, layouts
     - Diagnose tool for full stack health checks
     - Plugin development tools: message log, plugin reload, layer tree
     - Expression validation, project variables, settings access
     - Non-blocking TCP socket server with length-prefixed framing
     - Toolbar button with port configuration dropdown
 
-version=0.3.0
+version=0.4.0
 author=Nicolas Karasiak
 email=nicart@gmail.com
 tags=mcp,ai,claude,llm,automation,socket,remote
@@ -31,7 +31,15 @@ category=Plugins
 icon=icons/icon.png
 experimental=False
 deprecated=False
-changelog=0.3.0 : QGIS 4.0 compat (Qt6 exec, tree node truthiness), socket concurrency
+changelog=0.4.0 : Add ~50 new tools (processing/analysis: raster calculator, zonal stats,
+    spatial join, sample raster, export layer, field calculator, unique values, processing
+    batch/models; layouts: legend, scalebar, picture, table, atlas configure/export;
+    SQL across layers, layer duplicate/order, evaluate/identify), create_processing_model
+    tool + prompt, cut granular tool-schema tokens ~19%, installer auto-refresh + old config
+    migration, plugin menu icon, remove deprecated supportsQt6 metadata flag
+    0.3.1 : Security fix (remove subprocess shell=True), Configure dialog UX redesign,
+    fix remote mode detection, hide Plugin Link Status for Plugin Manager installs
+    0.3.0 : QGIS 4.0 compat (Qt6 exec, tree node truthiness), socket concurrency
     lock, OOM fix for large renders, built-in MCP Client Configurator in plugin UI,
     Gemini/Codex CLI installer support, helpful error hints, 10 new tool improvements
     0.2.1 : Fix installer auto-setup deps (pip fallback for Windows),

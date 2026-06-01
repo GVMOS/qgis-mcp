@@ -17,7 +17,7 @@ from qgis.core import (
     QgsVectorSimplifyMethod,
     QgsWkbTypes,
 )
-from qgis.PyQt.QtCore import QIODevice, Qt
+from qgis.PyQt.QtCore import QIODevice, Qt, QVariant
 from qgis.PyQt.QtWidgets import QToolButton
 
 # ── Layer types ──────────────────────────────────────────────────────
@@ -117,3 +117,21 @@ try:
 except AttributeError:
     SIMPLIFY_GEOMETRY = QgsVectorSimplifyMethod.GeometrySimplification
     SIMPLIFY_ANTIALIAS = QgsVectorSimplifyMethod.AntialiasingSimplification
+
+# ── QVariant type enums (PyQt6 moved these to QMetaType.Type) ────────
+try:
+    # PyQt6 / QGIS 4: QVariant.Type is an enum class
+    QVAR_STRING = QVariant.Type.String
+    QVAR_INT = QVariant.Type.Int
+    QVAR_DOUBLE = QVariant.Type.Double
+    QVAR_BOOL = QVariant.Type.Bool
+    QVAR_DATE = QVariant.Type.Date
+    QVAR_DATETIME = QVariant.Type.DateTime
+except AttributeError:
+    # PyQt5 / QGIS 3: QVariant members are direct attributes
+    QVAR_STRING = QVariant.String
+    QVAR_INT = QVariant.Int
+    QVAR_DOUBLE = QVariant.Double
+    QVAR_BOOL = QVariant.Bool
+    QVAR_DATE = QVariant.Date
+    QVAR_DATETIME = QVariant.DateTime
