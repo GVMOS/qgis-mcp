@@ -2,7 +2,7 @@
 
 Connect [QGIS](https://qgis.org/) to [Claude AI](https://claude.ai/) through the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/), enabling Claude to directly control QGIS — manage layers, edit features, run processing algorithms, render maps, and more.
 
-51 MCP tools covering layer management, feature editing, processing, rendering, styling, plugin development, and system management. Compatible with QGIS 3.28–4.x. Includes a one-command installer for 6+ MCP clients.
+51 MCP tools covering layer management, feature editing, processing, rendering, styling, plugin development, and system management. Compatible with QGIS 3.28–4.x. Works with Claude Code, Codex CLI, Gemini CLI, opencode, Claude Desktop, Cursor, VS Code, Windsurf, Zed, and more.
 
 ## Architecture
 
@@ -13,100 +13,93 @@ Claude ←→ MCP Server (FastMCP) ←→ TCP socket ←→ QGIS Plugin (QTimer)
 1. **QGIS Plugin** (`qgis_mcp_plugin/`) — Runs inside QGIS. Non-blocking TCP socket server that processes JSON commands within QGIS's event loop.
 2. **MCP Server** (`src/qgis_mcp/server.py`) — Runs outside QGIS. Exposes QGIS operations as MCP tools via [FastMCP](https://gofastmcp.com/).
 
-## Prerequisites
-
-- **QGIS** 3.28 or newer
-- **Python** 3.12+
-- **uv** package manager — [install uv](https://docs.astral.sh/uv/getting-started/installation/)
-
 ## Installation
 
-### 1. Clone the repository
+No clone needed. Requires QGIS 3.28+ and [uv](https://docs.astral.sh/uv/getting-started/installation/).
 
-```bash
-git clone https://github.com/nkarasiak/qgis-mcp.git
-cd qgis-mcp
-```
+### 1. Install the QGIS plugin
 
-### 2. Install with the one-command installer (recommended)
+In QGIS: `Plugins` > `Manage and Install Plugins` > search **QGIS MCP** > Install.
 
-```bash
-python install.py
-```
+Restart QGIS and click **Start Server** in the QGIS MCP dock widget.
 
-This will:
-- Symlink the QGIS plugin into your QGIS profile
-- Configure your MCP client(s) — supports Claude Desktop, Claude Code, Cursor, VS Code Copilot, Windsurf, and Zed
-
-Options: `--non-interactive --clients claude-desktop,cursor` for CI, `--remote` for uvx-based installs, `--profile myprofile` for non-default QGIS profiles, `--uninstall` to remove.
-
-Restart QGIS, then enable the plugin: `Plugins` > `Manage and Install Plugins` > search "QGIS MCP" > check the box.
+### 2. Connect your coding agent
 
 <details>
-<summary><b>Manual installation</b></summary>
-
-#### Install the QGIS plugin manually
-
-Copy (or symlink) the `qgis_mcp_plugin/` folder into your QGIS plugins directory:
-
-**Find your plugins folder:** In QGIS, go to `Settings` > `User Profiles` > `Open Active Profile Folder`, then navigate to `python/plugins/`.
-
-| OS | Typical path |
-|----|-------------|
-| Linux | `~/.local/share/QGIS/QGIS3/profiles/default/python/plugins/` |
-| macOS | `~/Library/Application Support/QGIS/QGIS3/profiles/default/python/plugins/` |
-| Windows | `%APPDATA%\QGIS\QGIS3\profiles\default\python\plugins\` |
+<summary>Claude Code</summary>
 
 ```bash
-# Example on Linux (symlink recommended for development)
-ln -s /path/to/qgis-mcp/qgis_mcp_plugin ~/.local/share/QGIS/QGIS3/profiles/default/python/plugins/qgis_mcp_plugin
+claude mcp add -s user qgis -- uvx --from git+https://github.com/nkarasiak/qgis-mcp qgis-mcp-server
 ```
 
-Restart QGIS, then enable the plugin: `Plugins` > `Manage and Install Plugins` > search "QGIS MCP" > check the box.
+Scope reference:
 
-#### Connect your MCP client manually
+| Flag | Stored in | Visible to |
+|------|-----------|-----------|
+| `-s local` (default) | `.mcp.json` (gitignored) | You, this project |
+| `-s project` | `.mcp.json` (committed) | Whole team, this project |
+| `-s user` | `~/.claude.json` | You, every project |
 
-##### Claude Code — project-level config (recommended)
+</details>
 
-Create a `.mcp.json` file at the root of your clone:
+<details>
+<summary>Codex CLI</summary>
+
+```bash
+codex mcp add qgis -- uvx --from git+https://github.com/nkarasiak/qgis-mcp qgis-mcp-server
+```
+
+Or edit `~/.codex/config.toml` directly:
+
+```toml
+[mcp_servers.qgis]
+command = "uvx"
+args = ["--from", "git+https://github.com/nkarasiak/qgis-mcp", "qgis-mcp-server"]
+```
+
+</details>
+
+<details>
+<summary>Gemini CLI</summary>
+
+Add to `~/.gemini/settings.json`:
 
 ```json
 {
   "mcpServers": {
     "qgis": {
-      "command": "uv",
-      "args": ["run", "src/qgis_mcp/server.py"],
-      "cwd": "/path/to/qgis-mcp"
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/nkarasiak/qgis-mcp", "qgis-mcp-server"]
     }
   }
 }
 ```
 
-Claude Code automatically detects `.mcp.json` when you open the project — no manual `claude mcp add` needed.
+</details>
 
-##### Claude Code — one-liner (remote install)
+<details>
+<summary>opencode</summary>
 
-```bash
-claude mcp add --transport stdio qgis-mcp -- uvx --from git+https://github.com/nkarasiak/qgis-mcp qgis-mcp-server
-```
-
-##### Claude Desktop
-
-Go to `Claude` > `Settings` > `Developer` > `Edit Config` and add:
+Add to `opencode.json` at your project root:
 
 ```json
 {
-  "mcpServers": {
+  "mcp": {
     "qgis": {
-      "command": "uv",
-      "args": ["run", "src/qgis_mcp/server.py"],
-      "cwd": "/path/to/qgis-mcp"
+      "type": "local",
+      "command": ["uvx", "--from", "git+https://github.com/nkarasiak/qgis-mcp", "qgis-mcp-server"],
+      "enabled": true
     }
   }
 }
 ```
 
-Or for a remote install without cloning:
+</details>
+
+<details>
+<summary>Claude Desktop, Cursor, VS Code, Windsurf, and others</summary>
+
+Add to your client's MCP config file:
 
 ```json
 {
@@ -122,10 +115,6 @@ Or for a remote install without cloning:
 }
 ```
 
-##### Cursor / other MCP clients
-
-Use the same JSON configuration above in your client's MCP settings file.
-
 </details>
 
 ## Usage
@@ -139,9 +128,8 @@ Use the same JSON configuration above in your client's MCP settings file.
 You have access to QGIS tools. Do the following:
 1. Ping to check the connection
 2. Create a new project and save it at "/tmp/my_project.qgz"
-3. Load the vector layer "/data/cities.shp" and name it "Cities"
-4. Get field statistics for the "population" field
-5. Create a graduated symbology on the "population" field with 5 classes
+3. Load the vector layer "world_map.gpkg" available in Qgis ("resources/data/world_map.gpkg")
+4. Filter "USA" from the field "adm0_a3"
 6. Render the map and show me the result
 7. Save the project
 ```
@@ -184,13 +172,21 @@ Groups: `system`, `project`, `layer`, `features`, `selection`, `style`, `canvas`
 | `QGIS_MCP_LOG_LEVEL` | `INFO` | File log level |
 | `QGIS_MCP_TOOL_MODE` | `granular` | `granular` (51 tools) or `compound` (~19 grouped) |
 
-## Development
+## Contributing
 
 ```bash
-# Run unit tests (no QGIS needed — mocked socket)
+git clone https://github.com/nkarasiak/qgis-mcp.git
+cd qgis-mcp
+python install.py   # symlinks plugin + configures your MCP client
+```
+
+`install.py` options: `--clients claude-desktop,cursor`, `--remote` (uvx instead of uv run), `--profile myprofile`, `--uninstall`.
+
+```bash
+# Unit tests (no QGIS needed — mocked socket)
 uv run --no-sync pytest tests/test_mcp_tools.py -v
 
-# Run integration tests (requires QGIS plugin running)
+# Integration tests (requires QGIS plugin running)
 uv run --no-sync pytest tests/test_qgis_live.py -v
 ```
 

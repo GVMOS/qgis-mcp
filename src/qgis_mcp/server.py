@@ -10,6 +10,7 @@ import logging
 import os
 import secrets
 import sys
+import threading
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -86,6 +87,7 @@ logger = _setup_logging()
 _qgis_connection: QgisMCPClient | None = None
 _connection_validated_at: float = 0.0
 _CONNECTION_TTL: float = 5.0  # seconds between getpeername() validations
+_qgis_lock = threading.Lock()  # serialize all socket access (asyncio.to_thread is concurrent)
 
 
 def get_qgis_connection() -> QgisMCPClient:
@@ -156,6 +158,9 @@ _first_successful_connection = False
 def _send_sync(command_type: str, params: dict | None = None, timeout: int = TIMEOUT_DEFAULT) -> dict:
     """Send a command synchronously and return the unwrapped result.
 
+    Holds _qgis_lock for the entire send+recv cycle so that concurrent
+    asyncio.to_thread calls cannot interleave frames on the shared socket.
+
     Retries on connection/socket errors with increasing delays. Uses a more
     patient retry schedule for the first connection (QGIS may still be starting),
     then shorter retries for subsequent reconnections (stale socket, plugin restart).
@@ -170,30 +175,31 @@ def _send_sync(command_type: str, params: dict | None = None, timeout: int = TIM
         max_retries = _FIRST_CONNECT_RETRIES
         delays = _FIRST_CONNECT_DELAYS
 
-    for attempt in range(max_retries):
-        try:
-            qgis = get_qgis_connection()
-            result = qgis.send_command(command_type, params, timeout=timeout)
-            _first_successful_connection = True
-            break
-        except _CONNECTION_ERRORS as exc:
-            last_exc = exc
-            _invalidate_connection()
-            if attempt < max_retries - 1:
-                delay = delays[min(attempt, len(delays) - 1)]
-                logger.warning(
-                    "Connection error (%s), retrying in %.1fs (attempt %d/%d)",
-                    exc,
-                    delay,
-                    attempt + 1,
-                    max_retries,
-                )
-                time.sleep(delay)
-            else:
-                logger.error("Connection failed after %d attempts: %s", max_retries, exc)
-                raise
-    else:
-        raise last_exc  # type: ignore[misc]  # unreachable, but satisfies type checker
+    with _qgis_lock:
+        for attempt in range(max_retries):
+            try:
+                qgis = get_qgis_connection()
+                result = qgis.send_command(command_type, params, timeout=timeout)
+                _first_successful_connection = True
+                break
+            except _CONNECTION_ERRORS as exc:
+                last_exc = exc
+                _invalidate_connection()
+                if attempt < max_retries - 1:
+                    delay = delays[min(attempt, len(delays) - 1)]
+                    logger.warning(
+                        "Connection error (%s), retrying in %.1fs (attempt %d/%d)",
+                        exc,
+                        delay,
+                        attempt + 1,
+                        max_retries,
+                    )
+                    time.sleep(delay)
+                else:
+                    logger.error("Connection failed after %d attempts: %s", max_retries, exc)
+                    raise
+        else:
+            raise last_exc  # type: ignore[misc]  # unreachable, but satisfies type checker
 
     if not result or result.get("status") == "error":
         raise RuntimeError(result.get("message", "Command failed") if result else "No response")
@@ -1593,9 +1599,10 @@ QGIS MCP connects QGIS Desktop to LLMs via the Model Context Protocol.
 - **Map Themes**: get_map_themes, add_map_theme, remove_map_theme, apply_map_theme
 
 ## Tips
-- **World basemap**: QGIS ships with a world map. Use `execute_code` with \
-`QgsApplication.pkgDataPath() + "/resources/data/world_map.gpkg"` to get the path, \
-then `add_vector_layer` to load it as a background for spatial context.
+- **World basemap**: QGIS ships with a built-in world map. In the QGIS UI, \
+type "world" in the locator bar (bottom of screen) to find and open it. Via MCP: \
+use `execute_code` to resolve `QgsApplication.pkgDataPath() + "/resources/data/world_map.gpkg"`, \
+then pass that path to `add_vector_layer` to load it as a background for spatial context.
 - **Map themes**: save/restore layer visibility presets — useful for toggling between views.
 - **Bookmarks**: save named extents for quick navigation to areas of interest.
 

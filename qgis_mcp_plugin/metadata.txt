@@ -19,7 +19,7 @@ about=Socket server plugin that exposes QGIS operations to LLMs through the
     - Non-blocking TCP socket server with length-prefixed framing
     - Toolbar button with port configuration dropdown
 
-version=0.2.1
+version=0.3.0
 author=Nicolas Karasiak
 email=nicart@gmail.com
 tags=mcp,ai,claude,llm,automation,socket,remote
@@ -31,7 +31,10 @@ category=Plugins
 icon=icons/icon.png
 experimental=False
 deprecated=False
-changelog=0.2.1 : Fix installer auto-setup deps (pip fallback for Windows),
+changelog=0.3.0 : QGIS 4.0 compat (Qt6 exec, tree node truthiness), socket concurrency
+    lock, OOM fix for large renders, built-in MCP Client Configurator in plugin UI,
+    Gemini/Codex CLI installer support, helpful error hints, 10 new tool improvements
+    0.2.1 : Fix installer auto-setup deps (pip fallback for Windows),
     QGIS 4.0 compat (tree node truthiness, message log signal),
     113 integration tests (TDD + stress + concurrency)
     0.2.0 : Add 16 new tools (labeling, bookmarks, themes, CRS, active layer, canvas scale),

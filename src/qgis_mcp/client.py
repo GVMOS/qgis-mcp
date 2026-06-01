@@ -105,6 +105,11 @@ class QgisMCPClient:
         except TimeoutError:
             logger.warning("Socket operation timed out after %ds", timeout)
             return {"status": "error", "message": "Connection timed out"}
+        except ValueError:
+            # Protocol framing error (e.g. "Response too large") — the socket
+            # buffer is now out of sync, so close it and let callers reconnect.
+            self.disconnect()
+            raise ConnectionError("Protocol framing error, connection reset")
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, ConnectionError):
             raise  # Let callers handle reconnection
         except Exception as e:
