@@ -14,6 +14,7 @@ import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from logging.handlers import RotatingFileHandler
+from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import Context, FastMCP
@@ -1382,6 +1383,38 @@ async def apply_style_qml(ctx: Context, layer_id: str, path: str) -> dict:
 )
 async def save_style_qml(ctx: Context, layer_id: str, path: str) -> dict:
     return await _send("save_style_qml", {"layer_id": layer_id, "path": path})
+
+
+@mcp.tool(
+    title="Export GeoServer Publish Manifest",
+    annotations=ToolAnnotations(readOnlyHint=True),
+    description=(
+        "Export a GeoServer publish manifest for all QGIS vector layers. "
+        "Includes layer datasource metadata, CRS, fields, and SLD style files."
+    ),
+    structured_output=True,
+)
+async def export_geoserver_publish_manifest(
+    ctx: Context,
+    output_dir: str | None = None,
+    include_hidden: bool = True,
+    include_invalid: bool = False,
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    if output_dir is None:
+        output_dir = os.environ.get("QGIS_MCP_GEOSERVER_EXPORT_DIR")
+    if output_dir is None:
+        output_dir = str(Path.home() / ".qgis_mcp" / "geoserver_styles")
+    return await _send(
+        "export_geoserver_publish_manifest",
+        {
+            "output_dir": output_dir,
+            "include_hidden": include_hidden,
+            "include_invalid": include_invalid,
+            "overwrite": overwrite,
+        },
+        timeout=TIMEOUT_LONG,
+    )
 
 
 @mcp.tool(

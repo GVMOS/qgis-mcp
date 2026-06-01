@@ -397,6 +397,57 @@ async def test_set_layer_style_tool(mock_connection):
 
 
 @pytest.mark.asyncio
+async def test_export_geoserver_publish_manifest_tool_passes_params(mock_connection):
+    mock_connection.send_command.return_value = {
+        "status": "success",
+        "result": {"ok": True, "layers": []},
+    }
+    from qgis_mcp.server import export_geoserver_publish_manifest
+
+    ctx = _make_ctx()
+    output = await export_geoserver_publish_manifest(
+        ctx,
+        output_dir=r"D:\exports",
+        include_hidden=False,
+        include_invalid=True,
+        overwrite=False,
+    )
+
+    assert output == {"ok": True, "layers": []}
+    mock_connection.send_command.assert_called_once()
+    command, params = mock_connection.send_command.call_args[0][:2]
+    assert command == "export_geoserver_publish_manifest"
+    assert params == {
+        "output_dir": r"D:\exports",
+        "include_hidden": False,
+        "include_invalid": True,
+        "overwrite": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_export_geoserver_publish_manifest_uses_env_default(mock_connection):
+    mock_connection.send_command.return_value = {
+        "status": "success",
+        "result": {"ok": True, "layers": []},
+    }
+    from qgis_mcp.server import export_geoserver_publish_manifest
+
+    ctx = _make_ctx()
+    with patch.dict(
+        "os.environ",
+        {"QGIS_MCP_GEOSERVER_EXPORT_DIR": r"D:\workspace\.qgis_mcp\geoserver_styles"},
+    ):
+        await export_geoserver_publish_manifest(ctx)
+
+    call_params = mock_connection.send_command.call_args[0][1]
+    assert call_params["output_dir"] == r"D:\workspace\.qgis_mcp\geoserver_styles"
+    assert call_params["include_hidden"] is True
+    assert call_params["include_invalid"] is False
+    assert call_params["overwrite"] is True
+
+
+@pytest.mark.asyncio
 async def test_select_features_tool(mock_connection):
     mock_connection.send_command.return_value = {"status": "success", "result": {"selected": 3}}
     from qgis_mcp.server import select_features
