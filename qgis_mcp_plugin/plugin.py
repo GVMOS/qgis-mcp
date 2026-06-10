@@ -39,6 +39,7 @@ from qgis.core import (
     QgsMapSettings,
     QgsMessageLog,
     QgsPointXY,
+    QgsPrintLayout,
     QgsProcessingModelAlgorithm,
     QgsProcessingModelChildAlgorithm,
     QgsProcessingModelChildParameterSource,
@@ -58,7 +59,6 @@ from qgis.core import (
     QgsProcessingParameterRasterLayer,
     QgsProcessingParameterString,
     QgsProcessingParameterVectorLayer,
-    QgsPrintLayout,
     QgsProject,
     QgsRasterLayer,
     QgsRectangle,
@@ -72,7 +72,18 @@ from qgis.core import (
     QgsVectorSimplifyMethod,
     QgsWkbTypes,
 )
-from qgis.PyQt.QtCore import QBuffer, QByteArray, QEventLoop, QObject, QProcess, QSize, QTimer, QUrl, QVariant
+from qgis.PyQt.QtCore import (
+    QBuffer,
+    QByteArray,
+    QEventLoop,
+    QObject,
+    QPointF,
+    QProcess,
+    QSize,
+    QTimer,
+    QUrl,
+    QVariant,
+)
 from qgis.PyQt.QtGui import QColor, QDesktopServices, QIcon
 from qgis.PyQt.QtWidgets import (
     QAction,
@@ -106,25 +117,24 @@ from .compat import (
     GEOM_POLYGON,
     IODEVICE_WRITEONLY,
     LAYER_RASTER,
-    QVAR_BOOL,
-    QVAR_DATE,
-    QVAR_DATETIME,
-    QVAR_DOUBLE,
-    QVAR_INT,
-    QVAR_STRING,
     LAYER_VECTOR,
     LAYOUT_SUCCESS,
     MSG_CRITICAL,
     MSG_INFO,
     MSG_WARNING,
     PROCESSING_OPTIONAL,
+    QVAR_BOOL,
+    QVAR_DATE,
+    QVAR_DATETIME,
+    QVAR_DOUBLE,
+    QVAR_INT,
+    QVAR_STRING,
     RASTER_STATS_ALL,
     SIMPLIFY_ANTIALIAS,
     SIMPLIFY_GEOMETRY,
     TOOLBUTTON_ICON_ONLY,
     TOOLBUTTON_MENU_POPUP,
 )
-
 
 _DEFAULT_HOST = "localhost"
 _DEFAULT_PORT = 9876
@@ -1270,10 +1280,9 @@ class QgisMCPServer(QObject):
                 continue
             if search:
                 search_lower = search.lower()
-                if (
-                    search_lower not in alg.id().lower()
-                    and search_lower not in alg.displayName().lower()
-                ):
+                in_id = search_lower in alg.id().lower()
+                in_name = search_lower in alg.displayName().lower()
+                if not in_id and not in_name:
                     continue
             algorithms.append(
                 {
@@ -1482,10 +1491,8 @@ class QgisMCPServer(QObject):
             try:
                 param.setBehavior(QgsProcessingParameterFile.Folder)
             except AttributeError:
-                try:
+                with contextlib.suppress(AttributeError):
                     param.setBehavior(Qgis.ProcessingFileParameterBehavior.Folder)
-                except AttributeError:
-                    pass
         elif type_name == "enum":
             options = spec.get("options") or []
             param = QgsProcessingParameterEnum(
@@ -1497,10 +1504,8 @@ class QgisMCPServer(QObject):
             raise Exception(f"Unsupported input type '{type_name}' for input '{name}'")
 
         if optional:
-            try:
+            with contextlib.suppress(Exception):
                 param.setFlags(param.flags() | PROCESSING_OPTIONAL)
-            except Exception:
-                pass
         return param
 
     def create_processing_model(
@@ -1565,10 +1570,8 @@ class QgisMCPServer(QObject):
         if group:
             model.setGroup(group)
         if description:
-            try:
+            with contextlib.suppress(Exception):
                 model.setHelpContent({"ALG_DESC": description})
-            except Exception:
-                pass
 
         # ---- Inputs ----
         defined_inputs = set()
@@ -2832,10 +2835,8 @@ class QgisMCPServer(QObject):
                 "name": p.name(),
                 "algorithm_count": len(p.algorithms()),
             }
-            try:
+            with contextlib.suppress(Exception):
                 info["active"] = bool(p.isActive())
-            except Exception:
-                pass
             providers.append(info)
         return {"providers": providers, "count": len(providers)}
 
@@ -3403,7 +3404,7 @@ class MCPConfiguratorDialog(QDialog):
 
         self.setup_env_btn.setEnabled(False)
         self.setup_env_btn.setText("Setting up...")
-        
+
         self.setup_process = QProcess()
         self.setup_process.setWorkingDirectory(str(self.repo_dir))
         self.setup_process.readyReadStandardOutput.connect(self._on_setup_output)
@@ -3424,12 +3425,12 @@ class MCPConfiguratorDialog(QDialog):
     def _on_setup_finished(self, exit_code, exit_status):
         self.setup_env_btn.setEnabled(True)
         self.setup_env_btn.setText("Setup Environment")
-        
+
         if exit_code == 0:
             QgsMessageLog.logMessage("Environment setup finished successfully.", "MCP", MSG_INFO)
         else:
             QgsMessageLog.logMessage(f"Environment setup failed (exit code {exit_code}).", "MCP", MSG_CRITICAL)
-        
+
         self.refresh_checklist()
         self.setup_process = None
 

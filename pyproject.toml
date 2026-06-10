@@ -32,6 +32,8 @@ line-length = 100
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
 ignore = [
     "E501",    # line too long — handled by formatter
+    "RUF001",  # ambiguous unicode in strings — en dashes are intentional prose
+    "RUF002",  # ambiguous unicode in docstrings — en dashes are intentional prose
 ]
 
 [tool.ruff.lint.per-file-ignores]

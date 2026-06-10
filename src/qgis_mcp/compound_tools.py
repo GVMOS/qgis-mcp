@@ -22,7 +22,6 @@ from qgis_mcp.helpers import (
     make_render_response,
 )
 
-
 # Map render-group layout actions to their underlying plugin commands.
 _LAYOUT_ITEM_COMMANDS = {
     "add_map": "add_layout_map",
