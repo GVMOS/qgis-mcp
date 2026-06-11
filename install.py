@@ -330,7 +330,7 @@ def configure_client(client_name: str, remote: bool) -> None:
                 capture_output=True,
             )
             result = subprocess.run(
-                [cli_bin, "mcp", "add", "-s", "user", "qgis", "--"] + add_args,
+                [cli_bin, "mcp", "add", "-s", "user", "qgis", "--", *add_args],
                 capture_output=True,
                 text=True,
             )
@@ -342,7 +342,7 @@ def configure_client(client_name: str, remote: bool) -> None:
                 capture_output=True,
             )
             result = subprocess.run(
-                [cli_bin, "mcp", "add", "qgis", "--"] + add_args,
+                [cli_bin, "mcp", "add", "qgis", "--", *add_args],
                 capture_output=True,
                 text=True,
             )

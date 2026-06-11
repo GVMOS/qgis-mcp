@@ -13,11 +13,9 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-import pytest
-
 from conftest import make_client
-from qgis_mcp.helpers import TIMEOUT_LONG
 
+from qgis_mcp.helpers import TIMEOUT_LONG
 
 # ---------------------------------------------------------------------------
 # 1. System & connectivity

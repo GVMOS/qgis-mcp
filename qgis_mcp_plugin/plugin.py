@@ -3184,7 +3184,7 @@ def _remove_refresh_from_entry(entry):
     args = cmd.get("args", []) if isinstance(cmd, dict) else entry.get("args", [])
     try:
         idx = args.index("--refresh-package")
-        del args[idx : idx + 2]
+        del args[idx:idx + 2]
     except ValueError:
         pass
     if isinstance(cmd, dict):
