@@ -3373,7 +3373,13 @@ class MCPConfiguratorDialog(QDialog):
                     target.symlink_to(plugin_src, target_is_directory=True)
                 except OSError:
                     # Symlinks need Developer Mode/admin — fall back to a junction
-                    os.system(f'mklink /J "{target}" "{plugin_src}"')
+                    # (_winapi.CreateJunction: direct API call, no shell)
+                    try:
+                        import _winapi
+
+                        _winapi.CreateJunction(str(plugin_src), str(target))
+                    except OSError:
+                        pass
                     if not (target.exists() and target.resolve() == plugin_src.resolve()):
                         QgsMessageLog.logMessage(
                             "Failed to link plugin. Run 'python install.py' from "

@@ -263,7 +263,10 @@ def install_plugin(profile: str, version: str = "auto") -> Path:
         try:
             target.symlink_to(PLUGIN_SRC, target_is_directory=True)
         except OSError:
-            os.system(f'mklink /J "{target}" "{PLUGIN_SRC}"')
+            # Junction via direct API call (no shell, unlike `mklink /J`)
+            import _winapi
+
+            _winapi.CreateJunction(str(PLUGIN_SRC), str(target))
     else:
         target.symlink_to(PLUGIN_SRC)
 
