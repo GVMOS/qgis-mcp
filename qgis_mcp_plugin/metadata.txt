@@ -31,7 +31,11 @@ category=Plugins
 icon=icons/icon.png
 experimental=False
 deprecated=False
-changelog=0.4.7 : Add OpenCode to MCP client configurator dropdown (config path,
+changelog=0.5.0 : Optional shared-secret socket auth (QGIS_MCP_TOKEN, constant-time
+    compare, client attaches automatically); auto-start-on-QGIS-startup toggle in plugin
+    menu and Setup & Configurator dialog; redesign Setup & Configurator dialog (logo header,
+    numbered group boxes, theme-aware styling) and remove the local git-clone health checklist
+    0.4.7 : Add OpenCode to MCP client configurator dropdown (config path,
     entry format with type/command array)
     0.4.3 : Offline fix - drop --refresh-package from default MCP configs (made
     server fail to start without internet), one-time prompt removes it from existing

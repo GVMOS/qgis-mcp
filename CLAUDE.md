@@ -203,6 +203,8 @@ uv run --no-sync pytest tests/ -v
 
 The QGIS plugin repository rejects uploads if the version already exists, so always bump all three together.
 
+**Always add a new `changelog=` entry in `qgis_mcp_plugin/metadata.txt`** when bumping the version. Prepend the new `X.Y.Z :` block above the previous one, summarizing the user-facing changes since the last release. Escape any literal `%` as `%%` (QGIS parses the metadata with `%`-interpolation). Do not bump the version without updating the changelog.
+
 **Release work lands on `dev` and is tagged there, but `uvx git+...` installs the server from the default branch `main`.** Before tagging a release, fast-forward `dev` → `main` (`git merge --ff-only origin/dev`) so the published server code matches the plugin — bumping only the version string on `main` makes `diagnose` falsely report `ok` while the new tools are missing (see issue #10).
 
 ## Linting Before Plugin Upload
