@@ -319,24 +319,37 @@ class QgisMCPServer(QObject):
             QgsMessageLog.logMessage(f"Server error: {e!s}", self.LOG_TAG, MSG_CRITICAL)
 
     def execute_command(self, command):
-        """Execute a command"""
-        try:
-            # Optional shared-secret auth. When QGIS_MCP_TOKEN is set in the
-            # plugin's environment, every command must carry a matching token;
-            # otherwise it is rejected before any handler runs. When the variable
-            # is unset, behaviour is unchanged (open) for backward compatibility.
-            expected_token = os.environ.get("QGIS_MCP_TOKEN", "").strip()
-            if expected_token:
-                provided_token = str(command.get("token") or "")
-                if not secrets.compare_digest(provided_token, expected_token):
-                    QgsMessageLog.logMessage(
-                        "Rejected command with missing/invalid token", self.LOG_TAG, MSG_WARNING
-                    )
-                    return {
-                        "status": "error",
-                        "message": "Authentication failed: missing or invalid token",
-                    }
+        """Execute a command.
 
+        Optional shared-secret auth gate: when QGIS_MCP_TOKEN is set in the
+        plugin's environment, every command must carry a matching token or it
+        is rejected before any handler runs. When unset, behaviour is unchanged
+        (open) for backward compatibility. Dispatch itself lives in _dispatch
+        so internal callers (e.g. batch) reuse it without re-authenticating.
+        """
+        # This runs on untrusted socket input before auth — never trust shape.
+        if not isinstance(command, dict):
+            return {"status": "error", "message": "Invalid command: expected an object"}
+
+        expected_token = os.environ.get("QGIS_MCP_TOKEN", "").strip()
+        if expected_token:
+            provided_token = str(command.get("token") or "")
+            # Compare as bytes: secrets.compare_digest rejects non-ASCII str.
+            if not secrets.compare_digest(
+                provided_token.encode("utf-8"), expected_token.encode("utf-8")
+            ):
+                QgsMessageLog.logMessage(
+                    "Rejected command with missing/invalid token", self.LOG_TAG, MSG_WARNING
+                )
+                return {
+                    "status": "error",
+                    "message": "Authentication failed: missing or invalid token",
+                }
+        return self._dispatch(command)
+
+    def _dispatch(self, command):
+        """Dispatch an already-authenticated command to its handler."""
+        try:
             cmd_type = command.get("type")
             params = command.get("params", {})
 
@@ -1007,13 +1020,10 @@ class QgisMCPServer(QObject):
 
     def batch(self, commands, **kwargs):
         """Execute multiple commands in sequence, return array of results."""
-        results = []
-        for cmd in commands:
-            cmd_type = cmd.get("type")
-            params = cmd.get("params", {})
-            result = self.execute_command({"type": cmd_type, "params": params})
-            results.append(result)
-        return results
+        return [
+            self._dispatch({"type": cmd.get("type"), "params": cmd.get("params", {})})
+            for cmd in commands
+        ]
 
     def execute_processing(self, algorithm, parameters, **kwargs):
         try:
