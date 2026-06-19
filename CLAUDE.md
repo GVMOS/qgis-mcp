@@ -52,6 +52,7 @@ uv run --no-sync pytest tests/ -v
 |---|---|---|
 | `QGIS_MCP_HOST` | `localhost` | Host for QGIS plugin socket connection |
 | `QGIS_MCP_PORT` | `9876` | Port for QGIS plugin socket connection |
+| `QGIS_MCP_TOKEN` | _(unset)_ | Optional shared secret. When set, the plugin requires a matching `token` on every command (constant-time compare); the client attaches it automatically. Unset = no auth (default, backward-compatible). |
 | `QGIS_MCP_TRANSPORT` | `stdio` | MCP transport: `stdio` or `streamable-http` |
 | `QGIS_MCP_LOG_FILE` | `~/.local/share/qgis-mcp/server.log` | Log file path (empty to disable file logging) |
 | `QGIS_MCP_LOG_LEVEL` | `INFO` | File log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |

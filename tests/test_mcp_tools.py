@@ -1,5 +1,6 @@
 """Unit tests for MCP server tools with mocked socket connection."""
 
+import json
 import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -8,6 +9,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
+from qgis_mcp.helpers import HEADER_STRUCT, get_auth_token
 from qgis_mcp.server import QgisMCPClient, _send_sync
 
 # --- Fixtures ---
@@ -1858,3 +1860,56 @@ def test_compound_tools_register():
 
     # Should have registered ~19 compound tools (15 main + 4 additional)
     assert mock_mcp.tool.call_count >= 14
+
+
+# --- Optional shared-secret auth (QGIS_MCP_TOKEN) ---
+
+
+def test_get_auth_token_disabled_by_default(monkeypatch):
+    monkeypatch.delenv("QGIS_MCP_TOKEN", raising=False)
+    assert get_auth_token() is None
+    # Whitespace-only is treated as unset.
+    monkeypatch.setenv("QGIS_MCP_TOKEN", "   ")
+    assert get_auth_token() is None
+
+
+def test_get_auth_token_when_set(monkeypatch):
+    monkeypatch.setenv("QGIS_MCP_TOKEN", "s3cr3t")
+    assert get_auth_token() == "s3cr3t"
+
+
+def _client_capturing_send(response):
+    """A QgisMCPClient whose socket captures sent bytes and returns a framed
+    response, so we can inspect the exact command payload that was sent."""
+    client = QgisMCPClient()
+    client.socket = MagicMock()
+    sent = bytearray()
+    client.socket.sendall.side_effect = lambda b: sent.extend(b)
+
+    resp_bytes = json.dumps(response).encode("utf-8")
+    frames = [HEADER_STRUCT.pack(len(resp_bytes)), resp_bytes]
+
+    def fake_recv_exact(n):
+        return frames.pop(0)
+
+    client._recv_exact = fake_recv_exact  # type: ignore[method-assign]
+    return client, sent
+
+
+def _sent_command(sent):
+    """Decode the JSON command from captured (header + payload) bytes."""
+    return json.loads(bytes(sent)[4:].decode("utf-8"))
+
+
+def test_send_command_attaches_token_when_set(monkeypatch):
+    monkeypatch.setenv("QGIS_MCP_TOKEN", "tok123")
+    client, sent = _client_capturing_send({"status": "success", "result": {}})
+    client.send_command("ping")
+    assert _sent_command(sent)["token"] == "tok123"
+
+
+def test_send_command_omits_token_when_unset(monkeypatch):
+    monkeypatch.delenv("QGIS_MCP_TOKEN", raising=False)
+    client, sent = _client_capturing_send({"status": "success", "result": {}})
+    client.send_command("ping")
+    assert "token" not in _sent_command(sent)

@@ -4,6 +4,7 @@ import fnmatch
 import io
 import json
 import os
+import secrets
 import shutil
 import socket
 import struct
@@ -197,6 +198,12 @@ class QgisMCPServer(QObject):
             QgsMessageLog.logMessage(
                 f"QGIS MCP server started on {self.host}:{self.port}", self.LOG_TAG, MSG_INFO
             )
+            auth_on = bool(os.environ.get("QGIS_MCP_TOKEN", "").strip())
+            QgsMessageLog.logMessage(
+                f"Token authentication {'ENABLED' if auth_on else 'disabled (open)'}",
+                self.LOG_TAG,
+                MSG_INFO if auth_on else MSG_WARNING,
+            )
             return True
         except Exception as e:
             QgsMessageLog.logMessage(f"Failed to start server: {e!s}", self.LOG_TAG, MSG_CRITICAL)
@@ -314,6 +321,22 @@ class QgisMCPServer(QObject):
     def execute_command(self, command):
         """Execute a command"""
         try:
+            # Optional shared-secret auth. When QGIS_MCP_TOKEN is set in the
+            # plugin's environment, every command must carry a matching token;
+            # otherwise it is rejected before any handler runs. When the variable
+            # is unset, behaviour is unchanged (open) for backward compatibility.
+            expected_token = os.environ.get("QGIS_MCP_TOKEN", "").strip()
+            if expected_token:
+                provided_token = str(command.get("token") or "")
+                if not secrets.compare_digest(provided_token, expected_token):
+                    QgsMessageLog.logMessage(
+                        "Rejected command with missing/invalid token", self.LOG_TAG, MSG_WARNING
+                    )
+                    return {
+                        "status": "error",
+                        "message": "Authentication failed: missing or invalid token",
+                    }
+
             cmd_type = command.get("type")
             params = command.get("params", {})
 

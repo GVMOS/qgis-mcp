@@ -5,6 +5,7 @@ Imports only from ``mcp`` and stdlib — no circular-import risk.
 
 import importlib.metadata
 import json
+import os
 import struct
 
 from mcp.types import Annotations, ImageContent, ResourceLink, TextContent
@@ -30,6 +31,18 @@ BATCH_BLOCKED_COMMANDS = frozenset(
         "reload_plugin",
     }
 )
+
+
+def get_auth_token():
+    """Return the shared-secret socket token, or ``None`` when auth is disabled.
+
+    Read from the ``QGIS_MCP_TOKEN`` environment variable. When unset or empty,
+    authentication is off and behaviour is unchanged — the plugin accepts any
+    command (the historical default). When set, the client attaches it to every
+    command and the plugin rejects commands that don't present a matching token.
+    """
+    token = os.environ.get("QGIS_MCP_TOKEN", "").strip()
+    return token or None
 
 
 def enrich_diagnose(result: dict) -> dict:

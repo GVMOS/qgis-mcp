@@ -182,10 +182,32 @@ Groups: `system`, `project`, `layer`, `features`, `selection`, `style`, `canvas`
 |---------------------|---------|-------------|
 | `QGIS_MCP_HOST` | `localhost` | Host for socket connection |
 | `QGIS_MCP_PORT` | `9876` | Port for socket connection |
+| `QGIS_MCP_TOKEN` | _(unset)_ | Optional shared secret. When set, the plugin rejects any command without a matching token. See [Authentication](#authentication). |
 | `QGIS_MCP_TRANSPORT` | `stdio` | MCP transport: `stdio` or `streamable-http` |
 | `QGIS_MCP_LOG_FILE` | `~/.local/share/qgis-mcp/server.log` | Log file path (empty to disable) |
 | `QGIS_MCP_LOG_LEVEL` | `INFO` | File log level |
 | `QGIS_MCP_TOOL_MODE` | `granular` | `granular` (102 tools) or `compound` (~23 grouped) |
+
+### Authentication
+
+By default the socket has **no authentication** — it binds to `localhost` only, but any process on the machine that can reach the port can drive QGIS (including `execute_code`, which runs arbitrary PyQGIS). For shared or multi-user machines, set a shared secret so only callers that know it can connect:
+
+1. Set `QGIS_MCP_TOKEN` in the **environment QGIS runs in** (so the plugin enforces it), then Stop/Start the server in the dock. The QGIS log shows `Token authentication ENABLED`.
+2. Set the **same** value in the MCP server's environment — add it to the `env` block of your MCP client config:
+
+   ```json
+   {
+     "mcpServers": {
+       "qgis": {
+         "command": "uvx",
+         "args": ["--from", "https://github.com/nkarasiak/qgis-mcp/archive/refs/heads/main.zip", "qgis-mcp-server"],
+         "env": { "QGIS_MCP_TOKEN": "your-long-random-secret" }
+       }
+     }
+   }
+   ```
+
+The token is compared in constant time. When `QGIS_MCP_TOKEN` is unset (the default), behaviour is unchanged. This raises the bar against other local users/processes; a process running as the same user can still read the token from your config, so it is not a sandbox.
 
 ## Contributing
 

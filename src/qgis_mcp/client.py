@@ -17,6 +17,7 @@ from qgis_mcp.helpers import (
     RECV_CHUNK_SIZE,
     TIMEOUT_DEFAULT,
     TIMEOUT_LONG,
+    get_auth_token,
 )
 
 logger = logging.getLogger("QgisMCPClient")
@@ -82,6 +83,12 @@ class QgisMCPClient:
             raise ConnectionError("Not connected to server")
 
         command = {"type": command_type, "params": params or {}}
+
+        # Attach the shared-secret token when QGIS_MCP_TOKEN is configured. No-op
+        # when auth is disabled, so existing setups are unaffected.
+        token = get_auth_token()
+        if token:
+            command["token"] = token
 
         try:
             data = json.dumps(command).encode("utf-8")
