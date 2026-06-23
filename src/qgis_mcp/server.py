@@ -2251,6 +2251,7 @@ then pass that path to `add_vector_layer` to load it as a background for spatial
 ## Environment Variables
 - QGIS_MCP_HOST — server host (default: localhost)
 - QGIS_MCP_PORT — server port (default: 9876)
+- QGIS_MCP_TOKEN — optional shared secret; when set, must match the plugin's value (default: unset = no auth)
 - QGIS_MCP_TRANSPORT — "stdio" (default) or "streamable-http"
 - QGIS_MCP_TOOL_MODE — "granular" (default, 51 tools) or "compound" (~19 grouped tools)
 - QGIS_MCP_LOG_FILE — log file path (default: ~/.local/share/qgis-mcp/server.log)

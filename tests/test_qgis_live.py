@@ -9,7 +9,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from qgis_mcp.client import QgisMCPClient
 
-
 # --- Fixtures ---
 
 
@@ -310,6 +309,33 @@ def test_batch_commands(client, setup_test_data):
     assert results[0]["status"] == "success"
     assert results[0]["result"]["pong"] is True
     assert results[1]["status"] == "success"
+
+
+@pytest.mark.skipif(
+    not os.environ.get("QGIS_MCP_TOKEN", "").strip(),
+    reason="Set QGIS_MCP_TOKEN (matching the running plugin) to test token auth",
+)
+def test_batch_under_token_auth(client, setup_test_data):
+    """Regression: with token auth ON, batched sub-commands must still run.
+
+    The client attaches the token to the outer batch command only; the plugin
+    authenticates that command, then dispatches each sub-command internally
+    without re-authenticating. A regression here would reject every sub-command
+    with "Authentication failed".
+    """
+    resp = client.send_command(
+        "batch",
+        {
+            "commands": [
+                {"type": "ping", "params": {}},
+                {"type": "get_layers", "params": {"limit": 5}},
+            ]
+        },
+    )
+    assert resp["status"] == "success"
+    results = resp["result"]
+    assert len(results) == 2
+    assert all(r["status"] == "success" for r in results)
 
 
 # --- Phase 1B: remove_layer and zoom_to_layer return {"ok": True} ---

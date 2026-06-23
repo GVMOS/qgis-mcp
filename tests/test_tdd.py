@@ -9,11 +9,6 @@ Usage:
 
 import uuid
 
-import pytest
-
-from conftest import make_client
-
-
 # ---------------------------------------------------------------------------
 # Layer lifecycle — creation, mutation, deletion invariants
 # ---------------------------------------------------------------------------
@@ -38,7 +33,7 @@ class TestLayerLifecycle:
 
         # Verify it appears in layer list
         resp = client.send_command("find_layer", {"name_pattern": "lifecycle_*"})
-        assert any(l["id"] == lid for l in resp["result"]["layers"])
+        assert any(lyr["id"] == lid for lyr in resp["result"]["layers"])
 
         # Remove
         resp = client.send_command("remove_layer", {"layer_id": lid})
@@ -46,7 +41,7 @@ class TestLayerLifecycle:
 
         # Verify it's gone
         resp = client.send_command("find_layer", {"name_pattern": "lifecycle_*"})
-        assert all(l["id"] != lid for l in resp["result"]["layers"])
+        assert all(lyr["id"] != lid for lyr in resp["result"]["layers"])
 
     def test_remove_nonexistent_layer_returns_error(self, client):
         resp = client.send_command("remove_layer", {"layer_id": "does_not_exist_xyz"})

@@ -23,7 +23,9 @@ from pathlib import Path
 
 REPO_DIR = Path(__file__).resolve().parent
 PLUGIN_SRC = REPO_DIR / "qgis_mcp_plugin"
-GITHUB_URL = "git+https://github.com/nkarasiak/qgis-mcp.git"
+# Zip archive instead of git+ URL: uvx then needs no git executable, which is
+# not visible to GUI-spawned MCP servers (e.g. Claude Desktop on Windows).
+GITHUB_URL = "https://github.com/nkarasiak/qgis-mcp/archive/refs/heads/main.zip"
 
 # ── Platform helpers ────────────────────────────────────────────────────────
 
@@ -261,7 +263,10 @@ def install_plugin(profile: str, version: str = "auto") -> Path:
         try:
             target.symlink_to(PLUGIN_SRC, target_is_directory=True)
         except OSError:
-            os.system(f'mklink /J "{target}" "{PLUGIN_SRC}"')
+            # Junction via direct API call (no shell, unlike `mklink /J`)
+            import _winapi
+
+            _winapi.CreateJunction(str(PLUGIN_SRC), str(target))
     else:
         target.symlink_to(PLUGIN_SRC)
 
@@ -330,7 +335,7 @@ def configure_client(client_name: str, remote: bool) -> None:
                 capture_output=True,
             )
             result = subprocess.run(
-                [cli_bin, "mcp", "add", "-s", "user", "qgis", "--"] + add_args,
+                [cli_bin, "mcp", "add", "-s", "user", "qgis", "--", *add_args],
                 capture_output=True,
                 text=True,
             )
@@ -342,7 +347,7 @@ def configure_client(client_name: str, remote: bool) -> None:
                 capture_output=True,
             )
             result = subprocess.run(
-                [cli_bin, "mcp", "add", "qgis", "--"] + add_args,
+                [cli_bin, "mcp", "add", "qgis", "--", *add_args],
                 capture_output=True,
                 text=True,
             )

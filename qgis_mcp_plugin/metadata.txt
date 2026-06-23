@@ -19,7 +19,7 @@ about=Socket server plugin that exposes QGIS operations to LLMs through the
     - Non-blocking TCP socket server with length-prefixed framing
     - Toolbar button with port configuration dropdown
 
-version=0.4.0
+version=0.5.0
 author=Nicolas Karasiak
 email=nicart@gmail.com
 tags=mcp,ai,claude,llm,automation,socket,remote
@@ -31,7 +31,19 @@ category=Plugins
 icon=icons/icon.png
 experimental=False
 deprecated=False
-changelog=0.4.0 : Add ~50 new tools (processing/analysis: raster calculator, zonal stats,
+changelog=0.4.7 : Add OpenCode to MCP client configurator dropdown (config path,
+    entry format with type/command array)
+    0.4.3 : Offline fix - drop --refresh-package from default MCP configs (made
+    server fail to start without internet), one-time prompt removes it from existing
+    configs; detect Windows junction plugin links in configurator (was always shown
+    as not linked); toolbar icon badge with live connected-client count; lint cleanup
+    0.4.2 : Clear plugin-repo code-quality check (flake8/W503) - import QPointF
+    (was undefined in layout positioning), refactor processing-algorithm search filter,
+    strip blank-line whitespace, use contextlib.suppress; add .flake8 lint gate
+    0.4.1 : Release sync (issue #10) - publish 0.4.0 server to main so uvx installs
+    a server matching the 0.4.0 plugin (diagnose version_match returns ok); escape percent
+    sign in changelog so QGIS parses metadata correctly
+    0.4.0 : Add ~50 new tools (processing/analysis: raster calculator, zonal stats,
     spatial join, sample raster, export layer, field calculator, unique values, processing
     batch/models; layouts: legend, scalebar, picture, table, atlas configure/export;
     SQL across layers, layer duplicate/order, evaluate/identify), create_processing_model

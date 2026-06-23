@@ -10,7 +10,7 @@ package = true
 
 [project]
 name = "qgis-mcp"
-version = "0.4.0"
+version = "0.5.0"
 description = "QGIS integration through the Model Context Protocol"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -32,10 +32,13 @@ line-length = 100
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
 ignore = [
     "E501",    # line too long — handled by formatter
+    "RUF001",  # ambiguous unicode in strings — en dashes are intentional prose
+    "RUF002",  # ambiguous unicode in docstrings — en dashes are intentional prose
 ]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S101"]           # assert is fine in tests
+"qgis_mcp_plugin/*" = ["UP038"]  # runs inside QGIS (Python 3.9 on QGIS 3.28) — `X | Y` in isinstance needs 3.10+
 "benchmarks/*" = ["T201", "B023"]  # print is fine; loop-var closures are called within same iteration
 
 [tool.pytest.ini_options]

@@ -29,10 +29,8 @@ Restart QGIS and click **Start Server** in the QGIS MCP dock widget.
 <summary>Claude Code</summary>
 
 ```bash
-claude mcp add -s user qgis -- uvx --refresh-package qgis-mcp --from git+https://github.com/nkarasiak/qgis-mcp qgis-mcp-server
+claude mcp add -s user qgis -- uvx --from https://github.com/nkarasiak/qgis-mcp/archive/refs/heads/main.zip qgis-mcp-server
 ```
-
-`--refresh-package qgis-mcp` makes uvx re-pull the latest server from GitHub on every launch so it stays in sync with the QGIS plugin. Drop it to pin to the cached version (faster start, manual updates).
 
 Scope reference:
 
@@ -48,7 +46,7 @@ Scope reference:
 <summary>Codex CLI</summary>
 
 ```bash
-codex mcp add qgis -- uvx --refresh-package qgis-mcp --from git+https://github.com/nkarasiak/qgis-mcp qgis-mcp-server
+codex mcp add qgis -- uvx --from https://github.com/nkarasiak/qgis-mcp/archive/refs/heads/main.zip qgis-mcp-server
 ```
 
 Or edit `~/.codex/config.toml` directly:
@@ -56,7 +54,7 @@ Or edit `~/.codex/config.toml` directly:
 ```toml
 [mcp_servers.qgis]
 command = "uvx"
-args = ["--refresh-package", "qgis-mcp", "--from", "git+https://github.com/nkarasiak/qgis-mcp", "qgis-mcp-server"]
+args = ["--from", "https://github.com/nkarasiak/qgis-mcp/archive/refs/heads/main.zip", "qgis-mcp-server"]
 ```
 
 </details>
@@ -71,7 +69,7 @@ Add to `~/.gemini/settings.json`:
   "mcpServers": {
     "qgis": {
       "command": "uvx",
-      "args": ["--refresh-package", "qgis-mcp", "--from", "git+https://github.com/nkarasiak/qgis-mcp", "qgis-mcp-server"]
+      "args": ["--from", "https://github.com/nkarasiak/qgis-mcp/archive/refs/heads/main.zip", "qgis-mcp-server"]
     }
   }
 }
@@ -89,7 +87,7 @@ Add to `opencode.json` at your project root:
   "mcp": {
     "qgis": {
       "type": "local",
-      "command": ["uvx", "--refresh-package", "qgis-mcp", "--from", "git+https://github.com/nkarasiak/qgis-mcp", "qgis-mcp-server"],
+      "command": ["uvx", "--from", "https://github.com/nkarasiak/qgis-mcp/archive/refs/heads/main.zip", "qgis-mcp-server"],
       "enabled": true
     }
   }
@@ -109,8 +107,7 @@ Add to your client's MCP config file:
     "qgis": {
       "command": "uvx",
       "args": [
-        "--refresh-package", "qgis-mcp",
-        "--from", "git+https://github.com/nkarasiak/qgis-mcp",
+        "--from", "https://github.com/nkarasiak/qgis-mcp/archive/refs/heads/main.zip",
         "qgis-mcp-server"
       ]
     }
@@ -144,9 +141,9 @@ The plugin (inside QGIS) and the MCP server (outside QGIS) must stay in sync —
 | Component | Remote install | Local install (`git clone`) |
 |-----------|---------------|----------------------------|
 | **QGIS plugin** | `Plugins` > `Manage and Install Plugins` > Update | Same — Plugin Manager picks up the new version from QGIS Hub |
-| **MCP server** | With `--refresh-package qgis-mcp` in your config (see above), uvx re-pulls the latest on each client restart. Without it, uvx caches — force an update with `uvx --refresh-package qgis-mcp --from git+https://github.com/nkarasiak/qgis-mcp qgis-mcp-server` | `git pull` then restart the MCP server process |
+| **MCP server** | uvx caches the downloaded archive — force an update with `uvx --refresh-package qgis-mcp --from https://github.com/nkarasiak/qgis-mcp/archive/refs/heads/main.zip qgis-mcp-server`, then restart your MCP client | `git pull` then restart the MCP server process |
 
-`uvx` caches the git checkout, so a plain config does **not** auto-update. The `--refresh-package qgis-mcp` flag in the configs above re-resolves only this package from GitHub on every launch (keeps the `mcp` dependency cached). Tradeoff: ~1–3s slower start and requires network at launch. Restart your MCP client to trigger the refresh.
+To auto-update instead, add `--refresh-package qgis-mcp` before `--from` in the configs above: uvx then re-resolves this package from GitHub on every launch. **Warning:** this requires network at launch — the MCP server fails to start when offline — and adds ~1–3s to startup. The plain configs above use the cached version and work offline.
 
 After updating the plugin, click **Stop / Start** in the QGIS MCP dock widget (or reload via `Plugins` > `QGIS MCP` > `Reload Plugin`) to load the new code without restarting QGIS.
 
@@ -185,10 +182,32 @@ Groups: `system`, `project`, `layer`, `features`, `selection`, `style`, `canvas`
 |---------------------|---------|-------------|
 | `QGIS_MCP_HOST` | `localhost` | Host for socket connection |
 | `QGIS_MCP_PORT` | `9876` | Port for socket connection |
+| `QGIS_MCP_TOKEN` | _(unset)_ | Optional shared secret. When set, the plugin rejects any command without a matching token. See [Authentication](#authentication). |
 | `QGIS_MCP_TRANSPORT` | `stdio` | MCP transport: `stdio` or `streamable-http` |
 | `QGIS_MCP_LOG_FILE` | `~/.local/share/qgis-mcp/server.log` | Log file path (empty to disable) |
 | `QGIS_MCP_LOG_LEVEL` | `INFO` | File log level |
 | `QGIS_MCP_TOOL_MODE` | `granular` | `granular` (102 tools) or `compound` (~23 grouped) |
+
+### Authentication
+
+By default the socket has **no authentication** — it binds to `localhost` only, but any process on the machine that can reach the port can drive QGIS (including `execute_code`, which runs arbitrary PyQGIS). For shared or multi-user machines, set a shared secret so only callers that know it can connect:
+
+1. Set `QGIS_MCP_TOKEN` in the **environment QGIS runs in** (so the plugin enforces it), then Stop/Start the server in the dock. The QGIS log shows `Token authentication ENABLED`.
+2. Set the **same** value in the MCP server's environment — add it to the `env` block of your MCP client config:
+
+   ```json
+   {
+     "mcpServers": {
+       "qgis": {
+         "command": "uvx",
+         "args": ["--from", "https://github.com/nkarasiak/qgis-mcp/archive/refs/heads/main.zip", "qgis-mcp-server"],
+         "env": { "QGIS_MCP_TOKEN": "your-long-random-secret" }
+       }
+     }
+   }
+   ```
+
+The token is compared in constant time. When `QGIS_MCP_TOKEN` is unset (the default), behaviour is unchanged. This raises the bar against other local users/processes; a process running as the same user can still read the token from your config, so it is not a sandbox.
 
 ## Contributing
 

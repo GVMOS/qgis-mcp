@@ -4,7 +4,7 @@ import fnmatch
 import io
 import json
 import os
-import re
+import secrets
 import shutil
 import socket
 import struct
@@ -41,6 +41,7 @@ from qgis.core import (
     QgsMapSettings,
     QgsMessageLog,
     QgsPointXY,
+    QgsPrintLayout,
     QgsProcessingModelAlgorithm,
     QgsProcessingModelChildAlgorithm,
     QgsProcessingModelChildParameterSource,
@@ -60,7 +61,6 @@ from qgis.core import (
     QgsProcessingParameterRasterLayer,
     QgsProcessingParameterString,
     QgsProcessingParameterVectorLayer,
-    QgsPrintLayout,
     QgsProject,
     QgsRasterLayer,
     QgsRectangle,
@@ -74,8 +74,18 @@ from qgis.core import (
     QgsVectorSimplifyMethod,
     QgsWkbTypes,
 )
-from qgis.PyQt.QtCore import QBuffer, QByteArray, QEventLoop, QObject, QProcess, QSize, QTimer, QUrl, QVariant
-from qgis.PyQt.QtGui import QColor, QDesktopServices, QIcon
+from qgis.PyQt.QtCore import (
+    QBuffer,
+    QByteArray,
+    QEventLoop,
+    QObject,
+    QPointF,
+    QSize,
+    QTimer,
+    QUrl,
+    QVariant,
+)
+from qgis.PyQt.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPen
 from qgis.PyQt.QtWidgets import (
     QAction,
     QCheckBox,
@@ -104,29 +114,33 @@ from .compat import (
     AGG_MIN,
     AGG_STDEV,
     AGG_SUM,
+    ALIGN_CENTER,
     GEOM_LINE,
     GEOM_POLYGON,
     IODEVICE_WRITEONLY,
     LAYER_RASTER,
+    LAYER_VECTOR,
+    LAYOUT_SUCCESS,
+    MSG_CRITICAL,
+    MSG_INFO,
+    MSG_WARNING,
+    MSGBOX_ACCEPT_ROLE,
+    MSGBOX_QUESTION,
+    MSGBOX_REJECT_ROLE,
+    PAINTER_ANTIALIAS,
+    PROCESSING_OPTIONAL,
     QVAR_BOOL,
     QVAR_DATE,
     QVAR_DATETIME,
     QVAR_DOUBLE,
     QVAR_INT,
     QVAR_STRING,
-    LAYER_VECTOR,
-    LAYOUT_SUCCESS,
-    MSG_CRITICAL,
-    MSG_INFO,
-    MSG_WARNING,
-    PROCESSING_OPTIONAL,
     RASTER_STATS_ALL,
     SIMPLIFY_ANTIALIAS,
     SIMPLIFY_GEOMETRY,
     TOOLBUTTON_ICON_ONLY,
     TOOLBUTTON_MENU_POPUP,
 )
-
 
 _DEFAULT_HOST = "localhost"
 _DEFAULT_PORT = 9876
@@ -141,16 +155,23 @@ class QgisMCPServer(QObject):
     LOG_TAG: ClassVar[str] = "MCP"
     MAX_CLIENTS: ClassVar[int] = 10
 
-    def __init__(self, host=_DEFAULT_HOST, port=_DEFAULT_PORT, iface=None):
+    def __init__(self, host=_DEFAULT_HOST, port=_DEFAULT_PORT, iface=None, on_clients_changed=None):
         super().__init__()
         self.host = host
         self.port = port
         self.iface = iface
+        self.on_clients_changed = on_clients_changed
         self.running = False
         self.socket = None
         self.clients: dict[socket.socket, bytes] = {}
         self.timer = None
         self._message_log = deque(maxlen=1000)
+
+    def _notify_clients_changed(self):
+        """Report the active client count to the UI (badge on the toolbar icon)."""
+        if self.on_clients_changed:
+            with contextlib.suppress(Exception):
+                self.on_clients_changed(len(self.clients))
 
     def start(self):
         """Start the server"""
@@ -176,6 +197,12 @@ class QgisMCPServer(QObject):
                 msg_log.messageReceived.connect(self._capture_message)
             QgsMessageLog.logMessage(
                 f"QGIS MCP server started on {self.host}:{self.port}", self.LOG_TAG, MSG_INFO
+            )
+            auth_on = bool(os.environ.get("QGIS_MCP_TOKEN", "").strip())
+            QgsMessageLog.logMessage(
+                f"Token authentication {'ENABLED' if auth_on else 'disabled (open)'}",
+                self.LOG_TAG,
+                MSG_INFO if auth_on else MSG_WARNING,
             )
             return True
         except Exception as e:
@@ -204,6 +231,7 @@ class QgisMCPServer(QObject):
             with contextlib.suppress(Exception):
                 client_sock.close()
         self.clients.clear()
+        self._notify_clients_changed()
 
         self.socket = None
         QgsMessageLog.logMessage("QGIS MCP server stopped", self.LOG_TAG, MSG_INFO)
@@ -214,6 +242,7 @@ class QgisMCPServer(QObject):
             client_sock.close()
         self.clients.pop(client_sock, None)
         QgsMessageLog.logMessage(f"{message} ({len(self.clients)} active)", self.LOG_TAG, level)
+        self._notify_clients_changed()
 
     def _send_response(self, client_sock, response):
         """Send a length-prefixed JSON response to a client."""
@@ -239,6 +268,7 @@ class QgisMCPServer(QObject):
                             self.LOG_TAG,
                             MSG_INFO,
                         )
+                        self._notify_clients_changed()
                     except BlockingIOError:
                         break
                     except Exception as e:
@@ -289,7 +319,36 @@ class QgisMCPServer(QObject):
             QgsMessageLog.logMessage(f"Server error: {e!s}", self.LOG_TAG, MSG_CRITICAL)
 
     def execute_command(self, command):
-        """Execute a command"""
+        """Execute a command.
+
+        Optional shared-secret auth gate: when QGIS_MCP_TOKEN is set in the
+        plugin's environment, every command must carry a matching token or it
+        is rejected before any handler runs. When unset, behaviour is unchanged
+        (open) for backward compatibility. Dispatch itself lives in _dispatch
+        so internal callers (e.g. batch) reuse it without re-authenticating.
+        """
+        # This runs on untrusted socket input before auth — never trust shape.
+        if not isinstance(command, dict):
+            return {"status": "error", "message": "Invalid command: expected an object"}
+
+        expected_token = os.environ.get("QGIS_MCP_TOKEN", "").strip()
+        if expected_token:
+            provided_token = str(command.get("token") or "")
+            # Compare as bytes: secrets.compare_digest rejects non-ASCII str.
+            if not secrets.compare_digest(
+                provided_token.encode("utf-8"), expected_token.encode("utf-8")
+            ):
+                QgsMessageLog.logMessage(
+                    "Rejected command with missing/invalid token", self.LOG_TAG, MSG_WARNING
+                )
+                return {
+                    "status": "error",
+                    "message": "Authentication failed: missing or invalid token",
+                }
+        return self._dispatch(command)
+
+    def _dispatch(self, command):
+        """Dispatch an already-authenticated command to its handler."""
         try:
             cmd_type = command.get("type")
             params = command.get("params", {})
@@ -962,13 +1021,10 @@ class QgisMCPServer(QObject):
 
     def batch(self, commands, **kwargs):
         """Execute multiple commands in sequence, return array of results."""
-        results = []
-        for cmd in commands:
-            cmd_type = cmd.get("type")
-            params = cmd.get("params", {})
-            result = self.execute_command({"type": cmd_type, "params": params})
-            results.append(result)
-        return results
+        return [
+            self._dispatch({"type": cmd.get("type"), "params": cmd.get("params", {})})
+            for cmd in commands
+        ]
 
     def execute_processing(self, algorithm, parameters, **kwargs):
         try:
@@ -1273,10 +1329,9 @@ class QgisMCPServer(QObject):
                 continue
             if search:
                 search_lower = search.lower()
-                if (
-                    search_lower not in alg.id().lower()
-                    and search_lower not in alg.displayName().lower()
-                ):
+                in_id = search_lower in alg.id().lower()
+                in_name = search_lower in alg.displayName().lower()
+                if not in_id and not in_name:
                     continue
             algorithms.append(
                 {
@@ -1485,10 +1540,8 @@ class QgisMCPServer(QObject):
             try:
                 param.setBehavior(QgsProcessingParameterFile.Folder)
             except AttributeError:
-                try:
+                with contextlib.suppress(AttributeError):
                     param.setBehavior(Qgis.ProcessingFileParameterBehavior.Folder)
-                except AttributeError:
-                    pass
         elif type_name == "enum":
             options = spec.get("options") or []
             param = QgsProcessingParameterEnum(
@@ -1500,10 +1553,8 @@ class QgisMCPServer(QObject):
             raise Exception(f"Unsupported input type '{type_name}' for input '{name}'")
 
         if optional:
-            try:
+            with contextlib.suppress(Exception):
                 param.setFlags(param.flags() | PROCESSING_OPTIONAL)
-            except Exception:
-                pass
         return param
 
     def create_processing_model(
@@ -1568,10 +1619,8 @@ class QgisMCPServer(QObject):
         if group:
             model.setGroup(group)
         if description:
-            try:
+            with contextlib.suppress(Exception):
                 model.setHelpContent({"ALG_DESC": description})
-            except Exception:
-                pass
 
         # ---- Inputs ----
         defined_inputs = set()
@@ -3032,10 +3081,8 @@ class QgisMCPServer(QObject):
                 "name": p.name(),
                 "algorithm_count": len(p.algorithms()),
             }
-            try:
+            with contextlib.suppress(Exception):
                 info["active"] = bool(p.isActive())
-            except Exception:
-                pass
             providers.append(info)
         return {"providers": providers, "count": len(providers)}
 
@@ -3334,12 +3381,15 @@ def _client_config_registry(repo_dir):
     else:
         zed_cfg = home / ".config" / "zed" / "settings.json"
 
+    opencode_cfg = home / ".config" / "opencode" / "opencode.json"
+
     return {
         "claude-desktop": {"path": claude_cfg, "key": "mcpServers"},
         "cursor": {"path": cursor_cfg, "key": "mcpServers"},
         "vscode": {"path": vscode_cfg, "key": "mcpServers", "project_local": True},
         "windsurf": {"path": windsurf_cfg, "key": "mcpServers"},
         "zed": {"path": zed_cfg, "key": "context_servers"},
+        "opencode": {"path": opencode_cfg, "key": "mcp"},
         "claude-code": {"print_only": True},
     }
 
@@ -3358,23 +3408,23 @@ def _qgis_entry_command_args(entry):
     return cmd, entry.get("args", [])
 
 
-def _qgis_entry_is_stale(entry):
-    """True when a remote uvx 'qgis' entry lacks --refresh-package (won't auto-update)."""
+def _qgis_entry_has_refresh(entry):
+    """True when a remote uvx 'qgis' entry has --refresh-package (fails offline)."""
     command, args = _qgis_entry_command_args(entry)
     if command != "uvx" or "qgis-mcp-server" not in args:
         return False  # local mode / unknown — leave alone
-    return "--refresh-package" not in args
+    return "--refresh-package" in args
 
 
-def _add_refresh_to_entry(entry):
-    """Insert '--refresh-package qgis-mcp' before '--from' in a uvx 'qgis' entry."""
+def _remove_refresh_from_entry(entry):
+    """Remove '--refresh-package qgis-mcp' from a uvx 'qgis' entry."""
     cmd = entry.get("command")
     args = cmd.get("args", []) if isinstance(cmd, dict) else entry.get("args", [])
     try:
-        idx = args.index("--from")
+        idx = args.index("--refresh-package")
+        del args[idx:idx + 2]
     except ValueError:
-        idx = 0
-    args[idx:idx] = ["--refresh-package", "qgis-mcp"]
+        pass
     if isinstance(cmd, dict):
         cmd["args"] = args
     else:
@@ -3390,23 +3440,64 @@ class MCPConfiguratorDialog(QDialog):
         self.setMinimumSize(600, 500)
 
         self.repo_dir = Path(__file__).resolve().parent.parent
-        self.github_url = "git+https://github.com/nkarasiak/qgis-mcp.git"
-        self.setup_process = None
+        # Zip archive instead of git+ URL: uvx then needs no git executable,
+        # which is not visible to GUI-spawned MCP servers (e.g. Claude Desktop
+        # on Windows).
+        self.github_url = "https://github.com/nkarasiak/qgis-mcp/archive/refs/heads/main.zip"
 
         self.init_ui()
         self.refresh_status()
-        self.refresh_checklist()
 
     def init_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setSpacing(10)
+        self.setStyleSheet(
+            "QGroupBox {"
+            "  font-weight: bold;"
+            "  border: 1px solid palette(mid);"
+            "  border-radius: 6px;"
+            "  margin-top: 10px;"
+            "  padding: 10px 10px 8px 10px;"
+            "}"
+            "QGroupBox::title {"
+            "  subcontrol-origin: margin;"
+            "  subcontrol-position: top left;"
+            "  left: 8px;"
+            "  padding: 0 4px;"
+            "}"
+        )
 
-        # ── Client selector ──────────────────────────────────────────
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+        layout.setContentsMargins(16, 16, 16, 16)
+
+        # ── Header (logo + title) ────────────────────────────────────
+        header = QHBoxLayout()
+        header.setSpacing(10)
+        logo = QLabel()
+        icon_path = os.path.join(os.path.dirname(__file__), "icons", "icon.png")
+        logo.setPixmap(QIcon(icon_path).pixmap(QSize(44, 44)))
+        header.addWidget(logo)
+        title_col = QVBoxLayout()
+        title_col.setSpacing(1)
+        heading = QLabel("QGIS MCP")
+        heading.setStyleSheet("font-size: 17px; font-weight: bold;")
+        subtitle = QLabel("Connect your AI client to QGIS")
+        subtitle.setStyleSheet("color: palette(mid);")
+        title_col.addWidget(heading)
+        title_col.addWidget(subtitle)
+        header.addLayout(title_col)
+        header.addStretch()
+        layout.addLayout(header)
+
+        # ── Step 1: client + options ─────────────────────────────────
+        client_group = QGroupBox("1  ·  AI client")
+        client_form = QVBoxLayout(client_group)
+        client_form.setSpacing(8)
+
         client_row = QHBoxLayout()
-        client_row.addWidget(QLabel("AI client:"))
+        client_row.addWidget(QLabel("Client:"))
         self.client_combo = QComboBox()
         self.client_combo.addItems(
-            ["claude-desktop", "cursor", "vscode", "windsurf", "zed", "claude-code"]
+            ["claude-code", "claude-desktop", "cursor", "opencode", "vscode", "windsurf", "zed"]
         )
         self.client_combo.setMinimumWidth(180)
         self.client_combo.currentTextChanged.connect(self._on_client_changed)
@@ -3422,48 +3513,70 @@ class MCPConfiguratorDialog(QDialog):
         self.mode_combo.currentTextChanged.connect(self._on_client_changed)
         self.mode_combo.setVisible(self._is_dev_install())
         client_row.addWidget(self.mode_combo)
+        client_row.addStretch()
+        client_form.addLayout(client_row)
 
         # Refresh toggle — adds `--refresh-package qgis-mcp` so uvx re-pulls the
         # latest server from GitHub on every launch (remote mode only).
-        self.refresh_check = QCheckBox("Always pull latest")
+        self.refresh_check = QCheckBox("Always pull latest server from GitHub")
         self.refresh_check.setToolTip(
             "Add --refresh-package qgis-mcp so uvx re-pulls the latest server from\n"
             "GitHub on every client launch (stays in sync with the plugin).\n"
-            "Uncheck to pin to the cached version (faster start, manual updates)."
+            "Warning: requires network at launch — the server fails to start offline.\n"
+            "Leave unchecked to use the cached version (works offline, manual updates)."
         )
-        self.refresh_check.setChecked(True)
+        self.refresh_check.setChecked(False)
         self.refresh_check.toggled.connect(self._on_client_changed)
-        client_row.addWidget(self.refresh_check)
-        client_row.addStretch()
-        layout.addLayout(client_row)
+        client_form.addWidget(self.refresh_check)
 
-        # ── Preview area ─────────────────────────────────────────────
+        self.autostart_check = QCheckBox("Start MCP server automatically when QGIS opens")
+        self.autostart_check.setToolTip(
+            "Launch the MCP server on QGIS startup so an AI agent can reconnect\n"
+            "without manually starting it (e.g. after a crash and restart)."
+        )
+        self.autostart_check.setChecked(
+            QgsSettings().value(f"{QgisMCPPlugin.SETTINGS_PREFIX}/autostart", False, type=bool)
+        )
+        self.autostart_check.toggled.connect(self._save_autostart)
+        client_form.addWidget(self.autostart_check)
+        layout.addWidget(client_group)
+
+        # ── Step 2: configuration preview ────────────────────────────
+        preview_group = QGroupBox("2  ·  Configuration")
+        preview_box = QVBoxLayout(preview_group)
+        preview_box.setSpacing(6)
+
         self.preview_label = QLabel("Add to your client config file:")
-        layout.addWidget(self.preview_label)
+        preview_box.addWidget(self.preview_label)
 
         preview_row = QHBoxLayout()
         self.preview_edit = QPlainTextEdit()
         self.preview_edit.setReadOnly(True)
         self.preview_edit.setMaximumHeight(160)
+        self.preview_edit.setStyleSheet("font-family: monospace;")
         preview_row.addWidget(self.preview_edit)
 
         copy_col = QVBoxLayout()
         self.copy_btn = QPushButton("Copy")
-        self.copy_btn.setFixedWidth(60)
+        self.copy_btn.setFixedWidth(64)
         self.copy_btn.clicked.connect(self._copy_preview)
         copy_col.addWidget(self.copy_btn)
         copy_col.addStretch()
         preview_row.addLayout(copy_col)
-        layout.addLayout(preview_row)
+        preview_box.addLayout(preview_row)
 
-        # ── Status + actions ─────────────────────────────────────────
         self.status_label = QLabel()
-        layout.addWidget(self.status_label)
+        preview_box.addWidget(self.status_label)
+        layout.addWidget(preview_group)
 
+        layout.addStretch()
+
+        # ── Actions ──────────────────────────────────────────────────
         action_row = QHBoxLayout()
         self.apply_btn = QPushButton("Apply Config")
         self.apply_btn.setStyleSheet(
-            "QPushButton { background-color: #4CAF50; color: white; font-weight: bold; padding: 5px 14px; }"
+            "QPushButton { background-color: #4CAF50; color: white; font-weight: bold; padding: 6px 16px; border-radius: 4px; }"
+            "QPushButton:hover { background-color: #43A047; }"
             "QPushButton:disabled { background-color: #aaa; }"
         )
         self.apply_btn.clicked.connect(self.run_config)
@@ -3479,34 +3592,13 @@ class MCPConfiguratorDialog(QDialog):
         action_row.addWidget(close_btn)
         layout.addLayout(action_row)
 
-        # ── Dev-only health checklist ─────────────────────────────────
-        self.checklist_group = QGroupBox("Development environment")
-        checklist_layout = QVBoxLayout()
-        self.status_link = QLabel()
-        self.status_uv = QLabel()
-        self.status_venv = QLabel()
-        self.status_entry = QLabel()
-        for lbl in (self.status_link, self.status_uv, self.status_venv, self.status_entry):
-            checklist_layout.addWidget(lbl)
-        dev_btn_row = QHBoxLayout()
-        self.refresh_check_btn = QPushButton("Refresh")
-        self.refresh_check_btn.clicked.connect(self.refresh_checklist)
-        self.setup_env_btn = QPushButton("Setup Environment")
-        self.setup_env_btn.setToolTip("Run 'uv sync' in the repository")
-        self.setup_env_btn.clicked.connect(self.setup_environment)
-        self.relink_btn = QPushButton("Re-link Plugin")
-        self.relink_btn.clicked.connect(self.relink_plugin)
-        dev_btn_row.addWidget(self.refresh_check_btn)
-        dev_btn_row.addWidget(self.setup_env_btn)
-        dev_btn_row.addWidget(self.relink_btn)
-        checklist_layout.addLayout(dev_btn_row)
-        self.checklist_group.setLayout(checklist_layout)
-        self.checklist_group.setVisible(self._is_dev_install())
-        layout.addWidget(self.checklist_group)
-
     def _is_dev_install(self):
         """True when the plugin is running from a git-cloned repository."""
         return (self.repo_dir / ".git").exists()
+
+    def _save_autostart(self, checked):
+        """Persist the auto-start-on-QGIS-startup preference."""
+        QgsSettings().setValue(f"{QgisMCPPlugin.SETTINGS_PREFIX}/autostart", checked)
 
     def _find_uv(self):
         """Return uv executable path, checking common Windows install locations."""
@@ -3523,115 +3615,6 @@ class MCPConfiguratorDialog(QDialog):
                 if p.exists():
                     return str(p)
         return None
-
-    def _get_qgis_plugins_dir(self):
-        """Get the plugins directory for the currently active QGIS profile."""
-        return Path(QgsApplication.qgisSettingsDirPath()) / "python" / "plugins"
-
-    def relink_plugin(self):
-        plugins_dir = self._get_qgis_plugins_dir()
-        target = plugins_dir / "qgis_mcp_plugin"
-        plugin_src = self.repo_dir / "qgis_mcp_plugin"
-
-        try:
-            if target.exists() or target.is_symlink():
-                if target.is_symlink() and target.resolve() == plugin_src.resolve():
-                    QgsMessageLog.logMessage("Plugin already correctly linked.", "MCP", MSG_INFO)
-                    self.refresh_checklist()
-                    return
-                if target.is_symlink() or target.is_file():
-                    target.unlink()
-                else:
-                    shutil.rmtree(target)
-
-            plugins_dir.mkdir(parents=True, exist_ok=True)
-            if sys.platform == "win32":
-                try:
-                    target.symlink_to(plugin_src, target_is_directory=True)
-                except OSError:
-                    QgsMessageLog.logMessage(
-                        "Symlink requires Developer Mode or admin on Windows. "
-                        "Run 'python install.py' from the repository root instead.",
-                        "MCP",
-                        MSG_WARNING,
-                    )
-                    return
-            else:
-                target.symlink_to(plugin_src)
-            QgsMessageLog.logMessage(f"Linked plugin: {target} -> {plugin_src}", "MCP", MSG_INFO)
-            self.refresh_checklist()
-        except Exception as e:
-            QgsMessageLog.logMessage(f"Failed to link plugin: {e}", "MCP", MSG_CRITICAL)
-
-    def refresh_checklist(self):
-        """Update the health checklist labels."""
-        # 1. Plugin Link Status
-        if self._is_dev_install():
-            plugins_dir = self._get_qgis_plugins_dir()
-            target = plugins_dir / "qgis_mcp_plugin"
-            is_linked = target.is_symlink() and target.resolve() == (self.repo_dir / "qgis_mcp_plugin").resolve()
-            self.status_link.setText(f"Plugin Link Status: {'✅ (linked)' if is_linked else '❌ (not linked)'}")
-            self.status_link.setStyleSheet(f"color: {'green' if is_linked else 'red'};")
-            self.relink_btn.setVisible(True)
-        else:
-            self.status_link.setVisible(False)
-            self.relink_btn.setVisible(False)
-
-        # 2. uv Installation
-        has_uv = bool(self._find_uv())
-        self.status_uv.setText(f"uv Installation: {'✅ (found)' if has_uv else '❌ (missing)'}")
-        self.status_uv.setStyleSheet(f"color: {'green' if has_uv else 'red'};")
-
-        # 3. Python Venv Ready
-        has_venv = (self.repo_dir / ".venv").exists()
-        self.status_venv.setText(f"Python Venv Ready: {'✅ (ready)' if has_venv else '❌ (missing)'}")
-        self.status_venv.setStyleSheet(f"color: {'green' if has_venv else 'red'};")
-
-        # 4. MCP Server Entry Point
-        has_entry = (self.repo_dir / "src" / "qgis_mcp" / "server.py").exists()
-        self.status_entry.setText(f"MCP Server Entry Point: {'✅ (exists)' if has_entry else '❌ (missing)'}")
-        self.status_entry.setStyleSheet(f"color: {'green' if has_entry else 'red'};")
-
-    def setup_environment(self):
-        """Run environment setup in background."""
-        if self.setup_process and self.setup_process.state() == QProcess.Running:
-            return
-
-        uv = self._find_uv()
-        cmd = uv if uv else "pip"
-        args = ["sync"] if uv else ["install", "-e", "."]
-
-        self.setup_env_btn.setEnabled(False)
-        self.setup_env_btn.setText("Setting up...")
-        
-        self.setup_process = QProcess()
-        self.setup_process.setWorkingDirectory(str(self.repo_dir))
-        self.setup_process.readyReadStandardOutput.connect(self._on_setup_output)
-        self.setup_process.readyReadStandardError.connect(self._on_setup_output)
-        self.setup_process.finished.connect(self._on_setup_finished)
-
-        QgsMessageLog.logMessage(f"Starting environment setup: {cmd} {' '.join(args)}", "MCP", MSG_INFO)
-        self.setup_process.start(cmd, args)
-
-    def _on_setup_output(self):
-        data = self.setup_process.readAllStandardOutput().data().decode().strip()
-        if not data:
-            data = self.setup_process.readAllStandardError().data().decode().strip()
-        if data:
-            for line in data.splitlines():
-                QgsMessageLog.logMessage(f"[Setup] {line}", "MCP", MSG_INFO)
-
-    def _on_setup_finished(self, exit_code, exit_status):
-        self.setup_env_btn.setEnabled(True)
-        self.setup_env_btn.setText("Setup Environment")
-        
-        if exit_code == 0:
-            QgsMessageLog.logMessage("Environment setup finished successfully.", "MCP", MSG_INFO)
-        else:
-            QgsMessageLog.logMessage(f"Environment setup failed (exit code {exit_code}).", "MCP", MSG_CRITICAL)
-        
-        self.refresh_checklist()
-        self.setup_process = None
 
     def _on_client_changed(self):
         self.refresh_status()
@@ -3681,6 +3664,11 @@ class MCPConfiguratorDialog(QDialog):
                     "env": {"QGIS_MCP_TRANSPORT": "stdio"},
                 },
                 "settings": {},
+            }
+        if client == "opencode":
+            return {
+                "type": "local",
+                "command": [entry["command"], *entry["args"]],
             }
         return entry
 
@@ -3950,24 +3938,67 @@ class QgisMCPPlugin:
         icon_path = os.path.join(os.path.dirname(__file__), "icons", "icon_active.png")
         return QIcon(icon_path)
 
+    def _badge_icon(self, count):
+        """Green logo with a notification-style badge showing the client count."""
+        if count <= 0:
+            return self._green_logo_icon()
+        pixmap = self._green_logo_icon().pixmap(QSize(64, 64))
+        size = pixmap.width()
+        d = int(size * 0.45)  # badge diameter — large enough to survive toolbar downscale
+        x = 0
+        y = size - d  # bottom-left corner
+        painter = QPainter(pixmap)
+        painter.setRenderHint(PAINTER_ANTIALIAS)
+        painter.setBrush(QColor("#D32F2F"))
+        pen = QPen(QColor("white"))  # white ring for contrast against the logo
+        pen.setWidth(max(2, size // 20))
+        painter.setPen(pen)
+        painter.drawEllipse(x + 1, y + 1, d - 2, d - 2)
+        painter.setPen(QColor("white"))
+        font = painter.font()
+        font.setPixelSize(int(d * 0.72))
+        font.setBold(True)
+        painter.setFont(font)
+        painter.drawText(x, y, d, d, ALIGN_CENTER, str(min(count, 9)))
+        painter.end()
+        return QIcon(pixmap)
+
+    def _on_clients_changed(self, count):
+        """Update the toolbar icon badge when MCP clients connect/disconnect."""
+        if not (self.action and self.server):
+            return
+        port = self.server.port
+        self.action.setIcon(self._badge_icon(count))
+        plural = "client" if count == 1 else "clients"
+        self.action.setToolTip(
+            f"MCP server running on :{port} — {count} {plural} connected — click to stop"
+        )
+
     def _show_help(self):
         """Show the MCP Setup & Configurator dialog."""
         dlg = MCPConfiguratorDialog(self.iface, self.iface.mainWindow())
         dlg.exec()
+        # Reflect an auto-start change made in the dialog onto the toolbar checkbox.
+        if hasattr(self, "autostart_cb"):
+            saved = QgsSettings().value(f"{self.SETTINGS_PREFIX}/autostart", False, type=bool)
+            if self.autostart_cb.isChecked() != saved:
+                self.autostart_cb.blockSignals(True)
+                self.autostart_cb.setChecked(saved)
+                self.autostart_cb.blockSignals(False)
 
     def _check_stale_mcp_configs(self):
-        """Offer (once) to add --refresh-package to existing no-refresh uvx configs.
+        """Offer (once) to remove --refresh-package from existing uvx configs.
 
-        Old users who configured before --refresh-package existed have a cached
-        uvx checkout that never auto-updates. Detect those entries and offer a
-        one-click rewrite so the server stays in sync with the plugin.
+        --refresh-package forces uvx to re-resolve the package from GitHub on
+        every launch, so the MCP server fails to start without network. Detect
+        those entries and offer a one-click rewrite to the cached version.
         """
         settings = QgsSettings()
-        if settings.value(f"{self.SETTINGS_PREFIX}/refresh_migration_prompted", False, type=bool):
+        if settings.value(f"{self.SETTINGS_PREFIX}/refresh_removal_prompted", False, type=bool):
             return
 
         repo_dir = Path(__file__).resolve().parent.parent
-        stale = []  # (client, path, key, data)
+        affected = []  # (client, path, key, data)
         for client, info in _client_config_registry(repo_dir).items():
             if info.get("print_only"):
                 continue
@@ -3980,38 +4011,38 @@ class QgisMCPPlugin:
             except (json.JSONDecodeError, OSError):
                 continue
             entry = data.get(info["key"], {}).get("qgis")
-            if _qgis_entry_is_stale(entry):
-                stale.append((client, path, info["key"], data))
+            if _qgis_entry_has_refresh(entry):
+                affected.append((client, path, info["key"], data))
 
-        if not stale:
+        if not affected:
             return  # nothing to migrate — stay silent
 
         # Prompt once, regardless of choice.
-        settings.setValue(f"{self.SETTINGS_PREFIX}/refresh_migration_prompted", True)
+        settings.setValue(f"{self.SETTINGS_PREFIX}/refresh_removal_prompted", True)
 
-        clients = ", ".join(sorted({c for c, *_ in stale}))
+        clients = ", ".join(sorted({c for c, *_ in affected}))
         box = QMessageBox(self.iface.mainWindow())
-        box.setWindowTitle("QGIS MCP — keep server up to date?")
-        box.setIcon(QMessageBox.Question)
+        box.setWindowTitle("QGIS MCP — fix offline startup?")
+        box.setIcon(MSGBOX_QUESTION)
         box.setText(
-            f"Your MCP config for {clients} pins a cached version of the server "
-            "that does not auto-update."
+            f"Your MCP config for {clients} uses '--refresh-package', which "
+            "makes the server fail to start without internet access."
         )
         box.setInformativeText(
-            "Add '--refresh-package qgis-mcp' so it re-pulls the latest from GitHub "
-            "on each launch (stays in sync with this plugin; ~1–3s slower start). "
+            "Remove '--refresh-package qgis-mcp' so the cached version is used "
+            "(works offline, faster start; update manually when needed). "
             "Restart your AI client afterwards to take effect."
         )
-        update_btn = box.addButton("Update configs", QMessageBox.AcceptRole)
-        box.addButton("Not now", QMessageBox.RejectRole)
+        update_btn = box.addButton("Update configs", MSGBOX_ACCEPT_ROLE)
+        box.addButton("Not now", MSGBOX_REJECT_ROLE)
         box.exec()
 
         if box.clickedButton() is not update_btn:
             return
 
         updated = []
-        for client, path, key, data in stale:
-            _add_refresh_to_entry(data[key]["qgis"])
+        for client, path, key, data in affected:
+            _remove_refresh_from_entry(data[key]["qgis"])
             try:
                 with open(path, "w", encoding="utf-8") as f:
                     json.dump(data, f, indent=2)
@@ -4023,13 +4054,15 @@ class QgisMCPPlugin:
                 )
         if updated:
             QgsMessageLog.logMessage(
-                f"Added --refresh-package to configs: {', '.join(updated)}", "MCP", MSG_INFO
+                f"Removed --refresh-package from configs: {', '.join(updated)}", "MCP", MSG_INFO
             )
 
     def toggle_server(self, checked):
         if checked:
             port = self.port_spin.value()
-            self.server = QgisMCPServer(port=port, iface=self.iface)
+            self.server = QgisMCPServer(
+                port=port, iface=self.iface, on_clients_changed=self._on_clients_changed
+            )
             if self.server.start():
                 self.action.setIcon(self._green_logo_icon())
                 self.action.setText(f"MCP :{port}")

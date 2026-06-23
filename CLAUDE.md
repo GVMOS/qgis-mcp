@@ -52,6 +52,7 @@ uv run --no-sync pytest tests/ -v
 |---|---|---|
 | `QGIS_MCP_HOST` | `localhost` | Host for QGIS plugin socket connection |
 | `QGIS_MCP_PORT` | `9876` | Port for QGIS plugin socket connection |
+| `QGIS_MCP_TOKEN` | _(unset)_ | Optional shared secret. When set, the plugin requires a matching `token` on every command (constant-time compare); the client attaches it automatically. Unset = no auth (default, backward-compatible). |
 | `QGIS_MCP_TRANSPORT` | `stdio` | MCP transport: `stdio` or `streamable-http` |
 | `QGIS_MCP_LOG_FILE` | `~/.local/share/qgis-mcp/server.log` | Log file path (empty to disable file logging) |
 | `QGIS_MCP_LOG_LEVEL` | `INFO` | File log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
@@ -195,11 +196,25 @@ uv run --no-sync pytest tests/ -v
 
 ## Version Management
 
-**Two version files must be kept in sync** when bumping the version:
+**Three version files must be kept in sync** when bumping the version:
 - `pyproject.toml` → `version = "X.Y.Z"` (MCP server / package version)
 - `qgis_mcp_plugin/metadata.txt` → `version=X.Y.Z` (QGIS plugin repository version)
+- `uv.lock` → the `qgis-mcp` package entry's `version` (keeps the lockfile self-consistent)
 
-The QGIS plugin repository rejects uploads if the version already exists, so always bump both files together.
+The QGIS plugin repository rejects uploads if the version already exists, so always bump all three together.
+
+**Release work lands on `dev` and is tagged there, but `uvx git+...` installs the server from the default branch `main`.** Before tagging a release, fast-forward `dev` → `main` (`git merge --ff-only origin/dev`) so the published server code matches the plugin — bumping only the version string on `main` makes `diagnose` falsely report `ok` while the new tools are missing (see issue #10).
+
+## Linting Before Plugin Upload
+
+The QGIS Plugin Repository runs a flake8-based code-quality check on upload and **enables W503** (line break before binary operator), which `ruff` deliberately does not implement. Run both before tagging/uploading:
+
+```bash
+uv run --no-sync ruff check qgis_mcp_plugin/ src/    # E/F/W/I/UP/B/SIM/RUF
+uv run --no-sync flake8 qgis_mcp_plugin/             # mirrors uploader (W503 on, via .flake8)
+```
+
+For W503, refactor the boolean onto fewer lines (extract sub-expressions) rather than breaking across the operator — Black/ruff formatting produces the W503 form the uploader rejects.
 
 ## Plugin Installation
 

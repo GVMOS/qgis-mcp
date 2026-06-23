@@ -18,7 +18,8 @@ from qgis.core import (
     QgsWkbTypes,
 )
 from qgis.PyQt.QtCore import QIODevice, Qt, QVariant
-from qgis.PyQt.QtWidgets import QToolButton
+from qgis.PyQt.QtGui import QPainter
+from qgis.PyQt.QtWidgets import QMessageBox, QToolButton
 
 # ── Layer types ──────────────────────────────────────────────────────
 try:
@@ -109,6 +110,28 @@ try:
     TOOLBUTTON_ICON_ONLY = Qt.ToolButtonStyle.ToolButtonIconOnly
 except AttributeError:
     TOOLBUTTON_ICON_ONLY = Qt.ToolButtonIconOnly
+
+try:
+    PAINTER_ANTIALIAS = QPainter.RenderHint.Antialiasing
+except AttributeError:
+    PAINTER_ANTIALIAS = QPainter.Antialiasing
+
+try:
+    ALIGN_CENTER = Qt.AlignmentFlag.AlignCenter
+except AttributeError:
+    ALIGN_CENTER = Qt.AlignCenter
+
+try:
+    MSGBOX_QUESTION = QMessageBox.Icon.Question
+except AttributeError:
+    MSGBOX_QUESTION = QMessageBox.Question
+
+try:
+    MSGBOX_ACCEPT_ROLE = QMessageBox.ButtonRole.AcceptRole
+    MSGBOX_REJECT_ROLE = QMessageBox.ButtonRole.RejectRole
+except AttributeError:
+    MSGBOX_ACCEPT_ROLE = QMessageBox.AcceptRole
+    MSGBOX_REJECT_ROLE = QMessageBox.RejectRole
 
 # ── Vector simplification hints ─────────────────────────────────────
 try:
