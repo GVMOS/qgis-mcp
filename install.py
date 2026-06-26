@@ -181,46 +181,7 @@ def _remote_entry() -> dict:
     }
 
 
-def _zed_local_entry() -> dict:
-    if shutil.which("uv"):
-        return {
-            "command": {
-                "path": "uv",
-                "args": [
-                    "--directory",
-                    str(REPO_DIR),
-                    "run",
-                    "--no-sync",
-                    "src/qgis_mcp/server.py",
-                ],
-                "env": {"QGIS_MCP_TRANSPORT": "stdio"},
-            },
-            "settings": {},
-        }
-    return {
-        "command": {
-            "path": str(_venv_python()),
-            "args": [str(REPO_DIR / "src" / "qgis_mcp" / "server.py")],
-            "env": {"QGIS_MCP_TRANSPORT": "stdio"},
-        },
-        "settings": {},
-    }
-
-
-def _zed_remote_entry() -> dict:
-    return {
-        "command": {
-            "path": "uvx",
-            "args": ["--from", GITHUB_URL, "qgis-mcp-server"],
-            "env": {"QGIS_MCP_TRANSPORT": "stdio"},
-        },
-        "settings": {},
-    }
-
-
 def _server_entry(client: str, remote: bool) -> dict:
-    if client == "zed":
-        return _zed_remote_entry() if remote else _zed_local_entry()
     return _remote_entry() if remote else _local_entry()
 
 
