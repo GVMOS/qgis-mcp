@@ -3196,16 +3196,11 @@ def _client_config_registry(repo_dir):
 
 
 def _qgis_entry_command_args(entry):
-    """Return (command, args) for a 'qgis' server entry, handling the zed shape.
-
-    Zed nests {'command': {'path': ..., 'args': [...]}}; others use a flat
-    {'command': 'uvx', 'args': [...]}.
+    """Return (command, args) for a 'qgis' server entry.
     """
     if not isinstance(entry, dict):
         return None, []
     cmd = entry.get("command")
-    if isinstance(cmd, dict):  # zed
-        return cmd.get("path"), cmd.get("args", [])
     return cmd, entry.get("args", [])
 
 
@@ -3457,15 +3452,6 @@ class MCPConfiguratorDialog(QDialog):
                     "args": [str(self.repo_dir / "src" / "qgis_mcp" / "server.py")],
                 }
 
-        if client == "zed":
-            return {
-                "command": {
-                    "path": entry["command"],
-                    "args": entry["args"],
-                    "env": {"QGIS_MCP_TRANSPORT": "stdio"},
-                },
-                "settings": {},
-            }
         if client == "opencode":
             return {
                 "type": "local",
