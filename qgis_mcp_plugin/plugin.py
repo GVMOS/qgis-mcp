@@ -11,9 +11,16 @@ import struct
 import sys
 import traceback
 from collections import deque
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import ClassVar
+
+# Compatibility for different python versions
+try:
+    from datetime import UTC, datetime
+except ImportError:
+    from datetime import datetime, timezone
+
+    UTC = timezone.utc
 
 from qgis.core import (
     Qgis,
