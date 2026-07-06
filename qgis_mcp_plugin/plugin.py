@@ -1088,6 +1088,8 @@ class QgisMCPServer(QObject):
             ms.setLayers(layers)
             rect = self.iface.mapCanvas().extent()
             ms.setExtent(rect)
+            ms.setDestinationCrs(self.iface.mapCanvas().mapSettings().destinationCrs())
+            ms.setTransformContext(QgsProject.instance().transformContext())
             ms.setOutputSize(QSize(width, height))
             ms.setBackgroundColor(QColor(255, 255, 255))
             ms.setOutputDpi(96)
