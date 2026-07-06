@@ -19,7 +19,7 @@ about=Socket server plugin that exposes QGIS operations to LLMs through the
     - Non-blocking TCP socket server with length-prefixed framing
     - Toolbar button with port configuration dropdown
 
-version=0.5.2
+version=0.6.0
 author=Nicolas Karasiak
 email=nicart@gmail.com
 tags=mcp,ai,claude,llm,automation,socket,remote
@@ -31,7 +31,12 @@ category=Plugins
 icon=icons/icon.png
 experimental=False
 deprecated=False
-changelog=0.5.1 : Fix render_map missing setDestinationCrs (layers whose CRS
+changelog=0.6.0 : Add get_3d_screenshot tool to capture an open 3D Map View
+    (renders the view's scene + camera pose through an offscreen print-layout 3D map
+    item, since the OpenGL 3D QWindow can't be grabbed directly); optional pitch/heading/
+    distance camera overrides applied to the capture only; screenshot_3d action on the
+    canvas compound tool
+    0.5.1 : Fix render_map missing setDestinationCrs (layers whose CRS
     differed from the canvas CRS were silently dropped from render_map output, #13);
     Python 3.9 compat for datetime.UTC fallback; installer JSONC support and removal of
     outdated Zed-specific config overrides
