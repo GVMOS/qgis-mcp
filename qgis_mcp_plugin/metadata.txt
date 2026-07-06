@@ -19,7 +19,7 @@ about=Socket server plugin that exposes QGIS operations to LLMs through the
     - Non-blocking TCP socket server with length-prefixed framing
     - Toolbar button with port configuration dropdown
 
-version=0.5.0
+version=0.5.1
 author=Nicolas Karasiak
 email=nicart@gmail.com
 tags=mcp,ai,claude,llm,automation,socket,remote
@@ -31,7 +31,11 @@ category=Plugins
 icon=icons/icon.png
 experimental=False
 deprecated=False
-changelog=0.5.0 : Optional shared-secret socket auth (QGIS_MCP_TOKEN, constant-time
+changelog=0.5.1 : Fix render_map missing setDestinationCrs (layers whose CRS
+    differed from the canvas CRS were silently dropped from render_map output, #13);
+    Python 3.9 compat for datetime.UTC fallback; installer JSONC support and removal of
+    outdated Zed-specific config overrides
+    0.5.0 : Optional shared-secret socket auth (QGIS_MCP_TOKEN, constant-time
     compare, client attaches automatically); auto-start-on-QGIS-startup toggle in plugin
     menu and Setup & Configurator dialog; redesign Setup & Configurator dialog (logo header,
     numbered group boxes, theme-aware styling) and remove the local git-clone health checklist
