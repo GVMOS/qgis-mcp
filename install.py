@@ -19,6 +19,7 @@ import os
 import shutil
 import subprocess
 import sys
+import re
 from pathlib import Path
 
 REPO_DIR = Path(__file__).resolve().parent
@@ -181,46 +182,7 @@ def _remote_entry() -> dict:
     }
 
 
-def _zed_local_entry() -> dict:
-    if shutil.which("uv"):
-        return {
-            "command": {
-                "path": "uv",
-                "args": [
-                    "--directory",
-                    str(REPO_DIR),
-                    "run",
-                    "--no-sync",
-                    "src/qgis_mcp/server.py",
-                ],
-                "env": {"QGIS_MCP_TRANSPORT": "stdio"},
-            },
-            "settings": {},
-        }
-    return {
-        "command": {
-            "path": str(_venv_python()),
-            "args": [str(REPO_DIR / "src" / "qgis_mcp" / "server.py")],
-            "env": {"QGIS_MCP_TRANSPORT": "stdio"},
-        },
-        "settings": {},
-    }
-
-
-def _zed_remote_entry() -> dict:
-    return {
-        "command": {
-            "path": "uvx",
-            "args": ["--from", GITHUB_URL, "qgis-mcp-server"],
-            "env": {"QGIS_MCP_TRANSPORT": "stdio"},
-        },
-        "settings": {},
-    }
-
-
 def _server_entry(client: str, remote: bool) -> dict:
-    if client == "zed":
-        return _zed_remote_entry() if remote else _zed_local_entry()
     return _remote_entry() if remote else _local_entry()
 
 
@@ -285,12 +247,43 @@ def uninstall_plugin(profile: str, version: str = "auto") -> None:
 
 # ── Client configuration ───────────────────────────────────────────────────
 
+def _jsonc_to_json(text) -> str:
+    """Convert potential JSONC json file to valid JSON
+
+    Cases:
+        - A: JSONC with multi-line comments
+        - B: JSONC with single-line comment
+        - C: URLs with `http://`, `https://` preserved
+        - D: // inside string values preserved
+        - E: Trailing commas in objects and arrays
+    """
+    caseA = re.sub(r'/\*.*?\*/', '', text, flags=re.DOTALL)
+    casesBCD = re.sub(
+        r'("(?:\\.|[^"\\])*")|//.*',
+        lambda m: m.group(1) or '',
+        caseA,
+        flags=re.MULTILINE
+    )
+    caseE = re.sub(r',\s*([}\]])', r'\1', casesBCD)
+    return caseE
 
 def _read_json(path: Path) -> dict:
-    if path.exists():
-        text = path.read_text(encoding="utf-8").strip()
-        return json.loads(text) if text else {}
-    return {}
+    if not path.exists() or not (text := path.read_text(encoding="utf-8").strip()):
+        return {}
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    try:
+        cleaned = _jsonc_to_json(text)
+        return json.loads(cleaned)
+    except json.JSONDecodeError as e:
+        raise ValueError(
+            f"Failed to parse {path}: not valid JSON or JSONC. "
+            f"Error: {e}"
+        ) from e
 
 
 def _backup(path: Path) -> None:

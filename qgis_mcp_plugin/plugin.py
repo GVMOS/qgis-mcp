@@ -9,11 +9,19 @@ import shutil
 import socket
 import struct
 import sys
+import tempfile
 import traceback
 from collections import deque
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import ClassVar
+
+# Compatibility for different python versions
+try:
+    from datetime import UTC, datetime
+except ImportError:
+    from datetime import datetime, timezone
+
+    UTC = timezone.utc
 
 from qgis.core import (
     Qgis,
@@ -85,7 +93,7 @@ from qgis.PyQt.QtCore import (
     QUrl,
     QVariant,
 )
-from qgis.PyQt.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPen
+from qgis.PyQt.QtGui import QColor, QDesktopServices, QIcon, QImage, QPainter, QPen
 from qgis.PyQt.QtWidgets import (
     QAction,
     QCheckBox,
@@ -466,6 +474,8 @@ class QgisMCPServer(QObject):
                 "identify_features": self.identify_features,
                 "duplicate_layer": self.duplicate_layer,
                 "set_layer_order": self.set_layer_order,
+                # Phase 9 — 3D
+                "get_3d_screenshot": self.get_3d_screenshot,
             }
 
             handler = handlers.get(cmd_type)
@@ -1083,6 +1093,8 @@ class QgisMCPServer(QObject):
             ms.setLayers(layers)
             rect = self.iface.mapCanvas().extent()
             ms.setExtent(rect)
+            ms.setDestinationCrs(self.iface.mapCanvas().mapSettings().destinationCrs())
+            ms.setTransformContext(QgsProject.instance().transformContext())
             ms.setOutputSize(QSize(width, height))
             ms.setBackgroundColor(QColor(255, 255, 255))
             ms.setOutputDpi(96)
@@ -2065,6 +2077,100 @@ class QgisMCPServer(QObject):
             "mime_type": "image/png",
             "width": pixmap.width(),
             "height": pixmap.height(),
+        }
+
+    def get_3d_screenshot(
+        self, view_index=0, dpi=96, pitch=None, distance=None, heading=None, **kwargs
+    ):
+        """Capture an open 3D Map View as a PNG image.
+
+        The 3D map view is an OpenGL ``QWindow`` that ``QWidget.grab()`` cannot
+        read, so this reuses the open view's scene settings + camera pose and
+        renders them through a print layout's 3D map item (whose offscreen 3D
+        engine runs in C++). Requires a 3D map view to be open
+        (View > 3D Map Views > New 3D Map View).
+
+        Optional ``pitch`` (0 = straight down / top-down, 90 = horizontal /
+        edge-on; ~45 is a balanced oblique), ``heading`` (compass degrees), and
+        ``distance`` (metres) override the captured camera angle without changing
+        the live view.
+        """
+        view_index = int(view_index)
+        dpi = max(10, min(int(dpi), 600))  # clamp: bound render cost / memory use
+        try:
+            from qgis._3d import Qgs3DMapSettings, QgsLayoutItem3DMap
+        except ImportError as e:
+            raise Exception(
+                f"3D support is unavailable in this QGIS build (qgis._3d import failed: {e})"
+            ) from e
+
+        views = self.iface.mapCanvases3D()
+        if not views:
+            raise Exception(
+                "No 3D map view is open. Open one via "
+                "View > 3D Map Views > New 3D Map View, frame your scene, then retry."
+            )
+        if view_index < 0 or view_index >= len(views):
+            raise ValueError(
+                f"view_index {view_index} out of range (open 3D views: {len(views)})"
+            )
+        canvas3d = views[view_index]
+
+        # Clone the scene settings (copy constructor) so the live view is never
+        # mutated or shared, and snapshot its current camera pose.
+        map_settings = Qgs3DMapSettings(canvas3d.mapSettings())
+        pose = canvas3d.cameraController().cameraPose()
+
+        # Optional camera overrides — applied only to this captured copy, so the
+        # live 3D view is left untouched.
+        if pitch is not None:
+            pose.setPitchAngle(max(0.0, min(float(pitch), 90.0)))
+        if heading is not None:
+            pose.setHeadingAngle(float(heading) % 360.0)
+        if distance is not None and float(distance) > 0:
+            pose.setDistanceFromCenterPoint(float(distance))
+
+        # Match the output image to the 3D view's aspect ratio.
+        size = canvas3d.size()
+        view_w = max(1, size.width())
+        view_h = max(1, size.height())
+        page_w = 200.0
+        page_h = page_w * view_h / view_w
+
+        layout = QgsPrintLayout(QgsProject.instance())
+        layout.initializeDefaults()
+        layout.pageCollection().page(0).setPageSize(QgsLayoutSize(page_w, page_h))
+
+        item = QgsLayoutItem3DMap(layout)
+        item.attemptMove(QgsLayoutPoint(0, 0))
+        item.attemptResize(QgsLayoutSize(page_w, page_h))
+        item.setMapSettings(map_settings)
+        item.setCameraPose(pose)
+        layout.addLayoutItem(item)
+
+        tmp = os.path.join(tempfile.gettempdir(), f"mcp_3d_{secrets.token_hex(6)}.png")
+        try:
+            exporter = QgsLayoutExporter(layout)
+            export_settings = QgsLayoutExporter.ImageExportSettings()
+            export_settings.dpi = dpi
+            result = exporter.exportToImage(tmp, export_settings)
+            if int(result) != int(LAYOUT_SUCCESS) or not os.path.exists(tmp):
+                raise Exception(f"3D layout export failed (export code {int(result)})")
+            with open(tmp, "rb") as fh:
+                data = fh.read()
+        finally:
+            with contextlib.suppress(Exception):
+                os.remove(tmp)
+
+        img = QImage()
+        img.loadFromData(data, "PNG")
+        return {
+            "base64_data": base64.b64encode(data).decode("ascii"),
+            "mime_type": "image/png",
+            "width": img.width(),
+            "height": img.height(),
+            "view_index": view_index,
+            "open_3d_views": len(views),
         }
 
     def transform_coordinates(
@@ -3395,16 +3501,11 @@ def _client_config_registry(repo_dir):
 
 
 def _qgis_entry_command_args(entry):
-    """Return (command, args) for a 'qgis' server entry, handling the zed shape.
-
-    Zed nests {'command': {'path': ..., 'args': [...]}}; others use a flat
-    {'command': 'uvx', 'args': [...]}.
+    """Return (command, args) for a 'qgis' server entry.
     """
     if not isinstance(entry, dict):
         return None, []
     cmd = entry.get("command")
-    if isinstance(cmd, dict):  # zed
-        return cmd.get("path"), cmd.get("args", [])
     return cmd, entry.get("args", [])
 
 
@@ -3656,15 +3757,6 @@ class MCPConfiguratorDialog(QDialog):
                     "args": [str(self.repo_dir / "src" / "qgis_mcp" / "server.py")],
                 }
 
-        if client == "zed":
-            return {
-                "command": {
-                    "path": entry["command"],
-                    "args": entry["args"],
-                    "env": {"QGIS_MCP_TRANSPORT": "stdio"},
-                },
-                "settings": {},
-            }
         if client == "opencode":
             return {
                 "type": "local",
