@@ -2958,7 +2958,7 @@ class QgisMCPServer(QObject):
         siblings = list(parent.children())
         slots = sorted(siblings.index(n) for n in nodes)
         new_order = list(siblings)
-        for slot, node in zip(slots, nodes):
+        for slot, node in zip(slots, nodes, strict=True):
             new_order[slot] = node
         clones = [n.clone() for n in new_order]
         parent.insertChildNodes(0, clones)
