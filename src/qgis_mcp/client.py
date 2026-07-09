@@ -10,7 +10,7 @@ import json
 import logging
 import socket
 
-from qgis_mcp.helpers import (
+from qgis_mcp.protocol import (
     DEFAULT_HOST,
     DEFAULT_PORT,
     HEADER_STRUCT,

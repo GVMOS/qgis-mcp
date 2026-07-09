@@ -2067,8 +2067,10 @@ async def duplicate_layer(
 @mcp.tool(
     title="Set Layer Order",
     annotations=ToolAnnotations(idempotentHint=True),
-    description="Set the explicit layer draw order in the tree. layer_ids is the ordered list "
-    "of layer ids from top (drawn last) to bottom.",
+    description="Reorder layer tree nodes; tree order is draw order. layer_ids is the ordered "
+    "list of layer ids from top (drawn last) to bottom; unlisted layers keep their slots. "
+    "Clears any custom draw order (it freezes a snapshot list — layers added later would "
+    "silently draw behind everything).",
 )
 async def set_layer_order(ctx: Context, layer_ids: list[str]) -> dict:
     return await _send("set_layer_order", {"layer_ids": layer_ids})

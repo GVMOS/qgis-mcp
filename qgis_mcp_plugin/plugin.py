@@ -3133,17 +3133,38 @@ class QgisMCPServer(QObject):
         return {"ok": True, "output_layer_id": clone.id(), "name": clone.name()}
 
     def set_layer_order(self, layer_ids, **kwargs):
-        """Set explicit layer draw order in the tree (top to bottom)."""
+        """Reorder layer tree nodes (top to bottom); tree order is draw order.
+
+        Listed layers are rearranged into the given order within their common
+        parent; unlisted siblings keep their slots. Deliberately does NOT use
+        QGIS's custom draw order — that freezes a snapshot list, so any layer
+        added afterwards would silently draw behind everything; any existing
+        custom order is cleared for the same reason.
+        """
         project = QgsProject.instance()
         root = project.layerTreeRoot()
-        layers = []
+        nodes = []
         for lid in layer_ids:
-            lyr = project.mapLayer(lid)
-            if lyr is None:
-                raise Exception(f"Layer not found: {lid}")
-            layers.append(lyr)
-        root.setHasCustomLayerOrder(True)
-        root.setCustomLayerOrder(layers)
+            node = root.findLayer(lid)
+            if node is None:
+                raise Exception(f"Layer not found in layer tree: {lid}")
+            nodes.append(node)
+        parent = nodes[0].parent()
+        for node in nodes[1:]:
+            if node.parent() is not parent:
+                raise Exception("All layers must be in the same group to reorder")
+
+        siblings = list(parent.children())
+        slots = sorted(siblings.index(n) for n in nodes)
+        new_order = list(siblings)
+        for slot, node in zip(slots, nodes, strict=True):
+            new_order[slot] = node
+        clones = [n.clone() for n in new_order]
+        parent.insertChildNodes(0, clones)
+        for node in siblings:
+            parent.removeChildNode(node)
+
+        root.setHasCustomLayerOrder(False)
         return {"ok": True, "order": layer_ids}
 
     # ------------------------------------------------------------------
