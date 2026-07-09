@@ -19,7 +19,7 @@ about=Socket server plugin that exposes QGIS operations to LLMs through the
     - Non-blocking TCP socket server with length-prefixed framing
     - Toolbar button with port configuration dropdown
 
-version=0.6.0
+version=0.6.1
 author=Nicolas Karasiak
 email=nicart@gmail.com
 tags=mcp,ai,claude,llm,automation,socket,remote
@@ -31,7 +31,12 @@ category=Plugins
 icon=icons/icon.png
 experimental=False
 deprecated=False
-changelog=0.6.0 : Add get_3d_screenshot tool to capture an open 3D Map View
+changelog=0.6.1 : Fix set_layer_order freezing a custom-draw-order snapshot
+    (layers added after the call silently drew behind everything, e.g. a
+    freshly digitised shapefile disappearing under a WMS basemap); reorders
+    layer-tree nodes directly instead and clears any stale custom order
+    (thanks @Gunther-Schulz, #19)
+    0.6.0 : Add get_3d_screenshot tool to capture an open 3D Map View
     (renders the view's scene + camera pose through an offscreen print-layout 3D map
     item, since the OpenGL 3D QWindow can't be grabbed directly); optional pitch/heading/
     distance camera overrides applied to the capture only; screenshot_3d action on the
