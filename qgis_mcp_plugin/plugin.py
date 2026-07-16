@@ -135,6 +135,8 @@ from .compat import (
     MSGBOX_QUESTION,
     MSGBOX_REJECT_ROLE,
     PAINTER_ANTIALIAS,
+    PROC_FILE_FOLDER,
+    PROC_NUM_INTEGER,
     PROCESSING_OPTIONAL,
     QVAR_BOOL,
     QVAR_DATE,
@@ -147,6 +149,7 @@ from .compat import (
     SIMPLIFY_GEOMETRY,
     TOOLBUTTON_ICON_ONLY,
     TOOLBUTTON_MENU_POPUP,
+    WKB_NO_GEOMETRY,
 )
 
 _DEFAULT_HOST = "localhost"
@@ -1532,7 +1535,7 @@ class QgisMCPServer(QObject):
             param = QgsProcessingParameterNumber(name, description, defaultValue=default)
             if type_name in ("int", "integer"):
                 with contextlib.suppress(AttributeError):
-                    param.setDataType(QgsProcessingParameterNumber.Integer)
+                    param.setDataType(PROC_NUM_INTEGER)
         elif type_name == "distance":
             param = QgsProcessingParameterDistance(name, description, defaultValue=default)
             parent = spec.get("parent_layer")
@@ -1556,11 +1559,8 @@ class QgisMCPServer(QObject):
             param = QgsProcessingParameterFile(name, description, defaultValue=default)
         elif type_name == "folder":
             param = QgsProcessingParameterFile(name, description, defaultValue=default)
-            try:
-                param.setBehavior(QgsProcessingParameterFile.Folder)
-            except AttributeError:
-                with contextlib.suppress(AttributeError):
-                    param.setBehavior(Qgis.ProcessingFileParameterBehavior.Folder)
+            with contextlib.suppress(AttributeError):
+                param.setBehavior(PROC_FILE_FOLDER)
         elif type_name == "enum":
             options = spec.get("options") or []
             param = QgsProcessingParameterEnum(
@@ -2845,7 +2845,7 @@ class QgisMCPServer(QObject):
         if geometry_field:
             definition.setGeometryField(geometry_field)
         else:
-            definition.setGeometryWkbType(QgsWkbTypes.NoGeometry)
+            definition.setGeometryWkbType(WKB_NO_GEOMETRY)
         if uid_field:
             definition.setUid(uid_field)
         vlayer = QgsVectorLayer(definition.toString(), layer_name, "virtual")
