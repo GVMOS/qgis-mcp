@@ -1378,12 +1378,10 @@ class QgisMCPServer(QObject):
                 "type": param.type(),
                 "optional": bool(param.flags() & PROCESSING_OPTIONAL),
             }
-            try:
+            with contextlib.suppress(Exception):
                 default = param.defaultValue()
                 if default is not None:
                     param_info["default"] = str(default)
-            except Exception:
-                pass
             params.append(param_info)
 
         outputs = []
