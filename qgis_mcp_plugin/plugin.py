@@ -21,7 +21,7 @@ try:
 except ImportError:
     from datetime import datetime, timezone
 
-    UTC = timezone.utc
+    UTC = timezone.utc  # noqa: UP017  (fallback path: datetime.UTC unavailable pre-3.11)
 
 from qgis.core import (
     Qgis,
@@ -1086,13 +1086,24 @@ class QgisMCPServer(QObject):
     def render_map_base64(self, width=800, height=600, path=None, **kwargs):
         """Render the map and return base64-encoded PNG data."""
         try:
-            ms = QgsMapSettings()
-            layers = list(QgsProject.instance().mapLayers().values())
-            ms.setLayers(layers)
-            rect = self.iface.mapCanvas().extent()
-            ms.setExtent(rect)
-            ms.setDestinationCrs(self.iface.mapCanvas().mapSettings().destinationCrs())
-            ms.setTransformContext(QgsProject.instance().transformContext())
+            canvas = self.iface.mapCanvas()
+            # Clone the canvas settings so the render reproduces what the user
+            # sees: visible layers only, canvas/custom draw order, destination
+            # CRS, transform context, labeling, style overrides and temporal
+            # state. Rebuilding from the project registry
+            # (QgsProject.mapLayers()) renders hidden layers in registry order
+            # and can place an opaque hidden layer over the overlays (issue #21).
+            src = canvas.mapSettings()
+            try:
+                ms = QgsMapSettings(src)  # copy constructor (preferred)
+            except Exception:
+                # Fallback if the copy constructor is unavailable on this QGIS:
+                # at minimum honour visibility, draw order, CRS and transform.
+                ms = QgsMapSettings()
+                ms.setLayers(src.layers())
+                ms.setDestinationCrs(src.destinationCrs())
+                ms.setTransformContext(QgsProject.instance().transformContext())
+            ms.setExtent(canvas.extent())
             ms.setOutputSize(QSize(width, height))
             ms.setBackgroundColor(QColor(255, 255, 255))
             ms.setOutputDpi(96)
