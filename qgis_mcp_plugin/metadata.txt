@@ -19,7 +19,7 @@ about=Socket server plugin that exposes QGIS operations to LLMs through the
     - Non-blocking TCP socket server with length-prefixed framing
     - Toolbar button with port configuration dropdown
 
-version=0.7.0
+version=0.7.1
 author=Nicolas Karasiak
 email=nicart@gmail.com
 tags=mcp,ai,claude,llm,automation,socket,remote
@@ -31,7 +31,12 @@ category=Plugins
 icon=icons/icon.png
 experimental=False
 deprecated=False
-changelog=0.7.0 : Fix render_map/render_map_base64 rendering hidden layers in
+changelog=0.7.1 : Add opencode installer client and Hermes desktop app (Windows)
+    support; Hermes uses a generated .bat launcher that clears venv vars before
+    invoking uvx to avoid a pydantic/mcp import clash; plugin Setup &
+    Configurator gains a hermes entry; new docs/agent-integration.md guide
+    (thanks @GetBack2Basics, #22)
+    0.7.0 : Fix render_map/render_map_base64 rendering hidden layers in
     project-registry order (an opaque hidden basemap could cover visible
     overlays even though the QGIS canvas looked correct); now clones the live
     canvas map settings so the output matches the canvas — visible layers only,
