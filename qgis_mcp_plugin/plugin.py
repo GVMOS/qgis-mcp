@@ -21,7 +21,7 @@ try:
 except ImportError:
     from datetime import datetime, timezone
 
-    UTC = timezone.utc
+    UTC = timezone.utc  # noqa: UP017  (fallback path: datetime.UTC unavailable pre-3.11)
 
 from qgis.core import (
     Qgis,
@@ -136,6 +136,8 @@ from .compat import (
     MSGBOX_QUESTION,
     MSGBOX_REJECT_ROLE,
     PAINTER_ANTIALIAS,
+    PROC_FILE_FOLDER,
+    PROC_NUM_INTEGER,
     PROCESSING_OPTIONAL,
     QVAR_BOOL,
     QVAR_DATE,
@@ -148,6 +150,7 @@ from .compat import (
     SIMPLIFY_GEOMETRY,
     TOOLBUTTON_ICON_ONLY,
     TOOLBUTTON_MENU_POPUP,
+    WKB_NO_GEOMETRY,
 )
 
 _DEFAULT_HOST = "localhost"
@@ -1088,13 +1091,24 @@ class QgisMCPServer(QObject):
     def render_map_base64(self, width=800, height=600, path=None, **kwargs):
         """Render the map and return base64-encoded PNG data."""
         try:
-            ms = QgsMapSettings()
-            layers = list(QgsProject.instance().mapLayers().values())
-            ms.setLayers(layers)
-            rect = self.iface.mapCanvas().extent()
-            ms.setExtent(rect)
-            ms.setDestinationCrs(self.iface.mapCanvas().mapSettings().destinationCrs())
-            ms.setTransformContext(QgsProject.instance().transformContext())
+            canvas = self.iface.mapCanvas()
+            # Clone the canvas settings so the render reproduces what the user
+            # sees: visible layers only, canvas/custom draw order, destination
+            # CRS, transform context, labeling, style overrides and temporal
+            # state. Rebuilding from the project registry
+            # (QgsProject.mapLayers()) renders hidden layers in registry order
+            # and can place an opaque hidden layer over the overlays (issue #21).
+            src = canvas.mapSettings()
+            try:
+                ms = QgsMapSettings(src)  # copy constructor (preferred)
+            except Exception:
+                # Fallback if the copy constructor is unavailable on this QGIS:
+                # at minimum honour visibility, draw order, CRS and transform.
+                ms = QgsMapSettings()
+                ms.setLayers(src.layers())
+                ms.setDestinationCrs(src.destinationCrs())
+                ms.setTransformContext(QgsProject.instance().transformContext())
+            ms.setExtent(canvas.extent())
             ms.setOutputSize(QSize(width, height))
             ms.setBackgroundColor(QColor(255, 255, 255))
             ms.setOutputDpi(96)
@@ -1369,12 +1383,10 @@ class QgisMCPServer(QObject):
                 "type": param.type(),
                 "optional": bool(param.flags() & PROCESSING_OPTIONAL),
             }
-            try:
+            with contextlib.suppress(Exception):
                 default = param.defaultValue()
                 if default is not None:
                     param_info["default"] = str(default)
-            except Exception:
-                pass
             params.append(param_info)
 
         outputs = []
@@ -1525,7 +1537,7 @@ class QgisMCPServer(QObject):
             param = QgsProcessingParameterNumber(name, description, defaultValue=default)
             if type_name in ("int", "integer"):
                 with contextlib.suppress(AttributeError):
-                    param.setDataType(QgsProcessingParameterNumber.Integer)
+                    param.setDataType(PROC_NUM_INTEGER)
         elif type_name == "distance":
             param = QgsProcessingParameterDistance(name, description, defaultValue=default)
             parent = spec.get("parent_layer")
@@ -1549,11 +1561,8 @@ class QgisMCPServer(QObject):
             param = QgsProcessingParameterFile(name, description, defaultValue=default)
         elif type_name == "folder":
             param = QgsProcessingParameterFile(name, description, defaultValue=default)
-            try:
-                param.setBehavior(QgsProcessingParameterFile.Folder)
-            except AttributeError:
-                with contextlib.suppress(AttributeError):
-                    param.setBehavior(Qgis.ProcessingFileParameterBehavior.Folder)
+            with contextlib.suppress(AttributeError):
+                param.setBehavior(PROC_FILE_FOLDER)
         elif type_name == "enum":
             options = spec.get("options") or []
             param = QgsProcessingParameterEnum(
@@ -3035,7 +3044,7 @@ class QgisMCPServer(QObject):
         if geometry_field:
             definition.setGeometryField(geometry_field)
         else:
-            definition.setGeometryWkbType(QgsWkbTypes.NoGeometry)
+            definition.setGeometryWkbType(WKB_NO_GEOMETRY)
         if uid_field:
             definition.setUid(uid_field)
         vlayer = QgsVectorLayer(definition.toString(), layer_name, "virtual")
@@ -3510,6 +3519,13 @@ def _client_config_registry(repo_dir):
 
     opencode_cfg = home / ".config" / "opencode" / "opencode.json"
 
+    # Hermes desktop app (Windows) - YAML-based config, handled as print_only
+    hermes_cfg = (
+        appdata / "Hermes" / "config.yaml"
+        if sys.platform == "win32" and appdata
+        else None
+    )
+
     return {
         "claude-desktop": {"path": claude_cfg, "key": "mcpServers"},
         "cursor": {"path": cursor_cfg, "key": "mcpServers"},
@@ -3518,6 +3534,7 @@ def _client_config_registry(repo_dir):
         "zed": {"path": zed_cfg, "key": "context_servers"},
         "opencode": {"path": opencode_cfg, "key": "mcp"},
         "claude-code": {"print_only": True},
+        "hermes": {"print_only": True, "entry_format": "hermes", "hermes_cfg": hermes_cfg},
     }
 
 
@@ -3619,7 +3636,7 @@ class MCPConfiguratorDialog(QDialog):
         client_row.addWidget(QLabel("Client:"))
         self.client_combo = QComboBox()
         self.client_combo.addItems(
-            ["claude-code", "claude-desktop", "cursor", "opencode", "vscode", "windsurf", "zed"]
+            ["claude-code", "claude-desktop", "cursor", "hermes", "opencode", "vscode", "windsurf", "zed"]
         )
         self.client_combo.setMinimumWidth(180)
         self.client_combo.currentTextChanged.connect(self._on_client_changed)
@@ -3785,6 +3802,55 @@ class MCPConfiguratorDialog(QDialog):
             }
         return entry
 
+    def _hermes_preview_text(self, remote: bool) -> str:
+        """Return the full setup instructions for Hermes desktop app (Windows).
+
+        Note: the bat-file content here mirrors install.py's _hermes_bat_content().
+        The plugin cannot import install.py (it runs inside QGIS), so the logic is
+        intentionally duplicated to keep the plugin self-contained.
+        """
+        home = Path.home()
+        appdata = Path(os.environ.get("APPDATA", str(home / "AppData" / "Roaming")))
+        hermes_dir = appdata / "Hermes"
+        bat_path = hermes_dir / "qgis-mcp-launch.bat"
+        cfg_path = hermes_dir / "config.yaml"
+
+        if remote:
+            launch_cmd = f'uvx --from "{self.github_url}" qgis-mcp-server'
+        else:
+            uv = self._find_uv() or "uv"
+            launch_cmd = f'"{uv}" --directory "{self.repo_dir}" run --no-sync src/qgis_mcp/server.py'
+
+        bat_lines = [
+            "@echo off",
+            "REM Launch qgis-mcp-server isolated from Hermes's own Python venv.",
+            "REM Clearing venv vars prevents Hermes's pydantic/mcp from being imported.",
+            "set VIRTUAL_ENV=",
+            "set PYTHONPATH=",
+            "set PYTHONHOME=",
+            launch_cmd,
+        ]
+        bat_content = "\n".join(bat_lines)
+
+        bat_escaped = str(bat_path).replace("\\", "\\\\")
+        yaml_block = (
+            "mcpServers:\n"
+            "  qgis:\n"
+            f'    command: "{bat_escaped}"\n'
+            "    args: []"
+        )
+
+        return (
+            f"Step 1 — Create this file:\n"
+            f"  {bat_path}\n\n"
+            f"Contents:\n"
+            f"{bat_content}\n\n"
+            f"Step 2 — Add to:\n"
+            f"  {cfg_path}\n\n"
+            f"{yaml_block}\n\n"
+            f"See docs/agent-integration.md for full details."
+        )
+
     def update_preview(self):
         client = self.client_combo.currentText()
         remote = self.mode_combo.currentText().startswith("Remote")
@@ -3792,6 +3858,13 @@ class MCPConfiguratorDialog(QDialog):
         # Refresh only applies to remote (uvx) mode.
         self.refresh_check.setEnabled(remote)
         info = self._get_client_info(client)
+
+        if info.get("entry_format") == "hermes":
+            self.preview_label.setText(
+                "Manual setup required — copy the .bat content and YAML config below:"
+            )
+            self.preview_edit.setPlainText(self._hermes_preview_text(remote))
+            return
 
         if info.get("print_only"):
             if remote:
@@ -3814,6 +3887,23 @@ class MCPConfiguratorDialog(QDialog):
     def refresh_status(self):
         client = self.client_combo.currentText()
         info = self._get_client_info(client)
+
+        if info.get("entry_format") == "hermes":
+            hermes_cfg = info.get("hermes_cfg")
+            if hermes_cfg and hermes_cfg.exists():
+                self.status_label.setText(
+                    f"Status: config.yaml found — verify 'qgis' is in mcpServers ({hermes_cfg})"
+                )
+                self.status_label.setStyleSheet("color: orange;")
+            else:
+                cfg_hint = str(hermes_cfg) if hermes_cfg else "%APPDATA%\\Hermes\\config.yaml"
+                self.status_label.setText(
+                    f"Status: Follow the steps below, then edit {cfg_hint}"
+                )
+                self.status_label.setStyleSheet("color: gray;")
+            self.apply_btn.setEnabled(False)
+            self.update_preview()
+            return
 
         if info.get("print_only"):
             self.status_label.setText("Run the command above in your terminal.")
