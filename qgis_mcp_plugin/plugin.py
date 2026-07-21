@@ -4,6 +4,7 @@ import fnmatch
 import io
 import json
 import os
+import re
 import secrets
 import shutil
 import socket
@@ -2567,11 +2568,9 @@ class QgisMCPServer(QObject):
     ):
         """Export vector layer metadata and SLD styles for GeoServer publishing."""
         project = QgsProject.instance()
-        output_root = Path(
-            output_dir
-            or os.environ.get("QGIS_MCP_GEOSERVER_EXPORT_DIR")
-            or Path.home() / ".qgis_mcp" / "geoserver_styles"
-        )
+        configured_output_dir = output_dir or os.environ.get("QGIS_MCP_GEOSERVER_EXPORT_DIR")
+        default_output_dir = Path.home() / ".qgis_mcp" / "geoserver_styles"
+        output_root = Path(configured_output_dir or default_output_dir)
         output_root.mkdir(parents=True, exist_ok=True)
 
         manifest = {
