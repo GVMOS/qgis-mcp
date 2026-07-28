@@ -1229,14 +1229,27 @@ class QgisMCPServer(QObject):
         layer = self._get_vector_layer(layer_id)
         dp = layer.dataProvider()
         attr_map = {}
-        for upd in updates:
+        for i, upd in enumerate(updates):
+            unknown = sorted(set(upd) - {"fid", "attributes"})
+            if unknown:
+                raise Exception(
+                    f"Update {i}: unknown key(s) {unknown} - expected 'fid' and 'attributes'"
+                )
+            if "fid" not in upd:
+                raise Exception(f"Update {i}: missing 'fid'")
             fid = upd["fid"]
+            if not layer.getFeature(fid).isValid():
+                raise Exception(f"Update {i}: no feature with fid {fid} in layer")
             attrs = upd.get("attributes", {})
             field_map = {}
             for field_name, value in attrs.items():
                 idx = layer.fields().indexOf(field_name)
-                if idx >= 0:
-                    field_map[idx] = value
+                if idx < 0:
+                    names = [fld.name() for fld in layer.fields()]
+                    raise Exception(
+                        f"Update {i}: no field '{field_name}' in layer (fields: {names})"
+                    )
+                field_map[idx] = value
             if field_map:
                 attr_map[fid] = field_map
 

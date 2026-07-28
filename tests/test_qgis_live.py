@@ -452,6 +452,28 @@ def test_add_features_rejects_bad_input(client, setup_test_data):
     assert resp["result"]["features"] == []
 
 
+def test_update_features_rejects_bad_input(client, setup_test_data):
+    """Bad update dicts must error instead of reporting a no-op as success."""
+    resp = client.send_command("get_layer_features", {"layer_id": setup_test_data, "limit": 1})
+    fid = resp["result"]["features"][0]["_fid"]
+
+    bad_cases = [
+        # Unknown field name: used to be dropped silently
+        [{"fid": fid, "attributes": {"nosuchfield": 1}}],
+        # fid that isn't in the layer: changeAttributeValues ignores it and returns True
+        [{"fid": 10**9, "attributes": {"name": "ghost"}}],
+        # update_features has never supported geometry; saying so beats ignoring it
+        [{"fid": fid, "geometry_wkt": "POINT(1 2)", "attributes": {"name": "x"}}],
+        # Missing fid used to raise a bare KeyError
+        [{"attributes": {"name": "x"}}],
+    ]
+    for updates in bad_cases:
+        resp = client.send_command(
+            "update_features", {"layer_id": setup_test_data, "updates": updates}
+        )
+        assert resp["status"] == "error", updates
+
+
 def test_update_features(client, setup_test_data):
     # Get first feature's fid
     resp = client.send_command(
