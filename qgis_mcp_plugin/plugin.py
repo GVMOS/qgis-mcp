@@ -1193,16 +1193,30 @@ class QgisMCPServer(QObject):
         layer = self._get_vector_layer(layer_id)
         dp = layer.dataProvider()
         qgs_features = []
-        for feat_data in features:
+        for i, feat_data in enumerate(features):
+            unknown = sorted(set(feat_data) - {"attributes", "geometry_wkt"})
+            if unknown:
+                raise Exception(
+                    f"Feature {i}: unknown key(s) {unknown} - expected "
+                    "'attributes' and/or 'geometry_wkt'"
+                )
             f = QgsFeature(layer.fields())
             attrs = feat_data.get("attributes", {})
             for field_name, value in attrs.items():
                 idx = layer.fields().indexOf(field_name)
-                if idx >= 0:
-                    f.setAttribute(idx, value)
+                if idx < 0:
+                    names = [fld.name() for fld in layer.fields()]
+                    raise Exception(
+                        f"Feature {i}: no field '{field_name}' in layer "
+                        f"(fields: {names})"
+                    )
+                f.setAttribute(idx, value)
             wkt = feat_data.get("geometry_wkt")
             if wkt:
-                f.setGeometry(QgsGeometry.fromWkt(wkt))
+                geom = QgsGeometry.fromWkt(wkt)
+                if geom.isNull():
+                    raise Exception(f"Feature {i}: invalid geometry_wkt: {wkt!r}")
+                f.setGeometry(geom)
             qgs_features.append(f)
 
         ok, added = dp.addFeatures(qgs_features)

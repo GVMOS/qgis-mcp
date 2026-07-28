@@ -413,6 +413,45 @@ def test_add_and_delete_features(client, setup_test_data):
     assert resp["result"]["deleted"] == 2
 
 
+def test_add_features_rejects_bad_input(client, setup_test_data):
+    """Bad feature dicts must error, not silently create null-geometry features."""
+    before = client.send_command("get_layer_features", {"layer_id": setup_test_data, "limit": 1})
+    assert before["status"] == "success"
+
+    bad_cases = [
+        # Wrong geometry key (issue #24): used to add a null-geometry feature
+        [{"attributes": {"id": 90}, "geometry": "POINT(1 2)"}],
+        # Unknown field name: used to be dropped silently
+        [{"attributes": {"nosuchfield": 1}, "geometry_wkt": "POINT(1 2)"}],
+        # Unparseable WKT: used to add a null-geometry feature
+        [{"attributes": {"id": 91}, "geometry_wkt": "NOT WKT AT ALL"}],
+    ]
+    for features in bad_cases:
+        resp = client.send_command(
+            "add_features", {"layer_id": setup_test_data, "features": features}
+        )
+        assert resp["status"] == "error", features
+
+    # A batch with one bad feature adds nothing
+    resp = client.send_command(
+        "add_features",
+        {
+            "layer_id": setup_test_data,
+            "features": [
+                {"attributes": {"id": 92}, "geometry_wkt": "POINT(1 2)"},
+                {"attributes": {"id": 93}, "geometry_wkt": "bogus"},
+            ],
+        },
+    )
+    assert resp["status"] == "error"
+    resp = client.send_command(
+        "get_layer_features",
+        {"layer_id": setup_test_data, "expression": "id >= 90", "limit": 10},
+    )
+    assert resp["status"] == "success"
+    assert resp["result"]["features"] == []
+
+
 def test_update_features(client, setup_test_data):
     # Get first feature's fid
     resp = client.send_command(
