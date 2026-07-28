@@ -18,6 +18,20 @@ The QGIS plugin repository rejects uploads if the version already exists, so alw
 
 **Release work lands on `dev` and is tagged there, but `uvx git+...` installs the server from the default branch `main`.** Before tagging a release, fast-forward `dev` → `main` (`git merge --ff-only origin/dev`) so the published server code matches the plugin — bumping only the version string on `main` makes `diagnose` falsely report `ok` while the new tools are missing (see issue #10).
 
+## Publishing to plugins.qgis.org
+
+Pushing a `v*` tag runs `.github/workflows/release.yml`, which builds the zip, attaches it to the GitHub release, and then POSTs it to the Hub:
+
+```
+POST https://plugins.qgis.org/plugins/api/qgis_mcp_plugin/version/add/
+Authorization: Bearer $QGIS_PLUGIN_TOKEN
+-F package=@<zip>  -F auto_approve_after_scan=true
+```
+
+The token is per-plugin, created at `https://plugins.qgis.org/plugins/qgis_mcp_plugin/tokens/create/` while logged in, and stored as the `QGIS_PLUGIN_TOKEN` repository secret. If the secret is absent the step logs and skips, so the GitHub release still succeeds.
+
+Upload is not publication. Every version goes through a two-step flow: upload confirmation email, then an async security scan. Passing the scan only makes the version *available for manual approval* by QGIS staff (approvals happen most weekdays, not weekends) — that is why a version can pass its checks and still sit unpublished. `auto_approve_after_scan=true` skips the manual wait, but only for uploaders holding the `can_approve` permission; request trusted status via the QGIS Developer mailing list. Check status any time at `https://plugins.qgis.org/plugins/qgis_mcp_plugin/version/<version>/` (Security tab) or `GET /plugins/api/qgis_mcp_plugin/version/<version>/json` with the same Bearer token.
+
 ## Linting Before Plugin Upload
 
 The QGIS Plugin Repository runs a flake8-based code-quality check on upload and **enables W503** (line break before binary operator), which `ruff` deliberately does not implement. Run both before tagging/uploading:
