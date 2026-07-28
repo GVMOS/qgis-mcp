@@ -14,6 +14,8 @@ The QGIS plugin repository rejects uploads if the version already exists, so alw
 
 **Always add a new `changelog=` entry in `qgis_mcp_plugin/metadata.txt`** when bumping the version. Prepend the new `X.Y.Z :` block above the previous one, summarizing the user-facing changes since the last release. Escape any literal `%` as `%%` (QGIS parses the metadata with `%`-interpolation). Do not bump the version without updating the changelog.
 
+**Keep only the current minor series in `changelog=`** — the Plugin Manager shows the whole field, so a full history is unreadable there. When starting a new minor (e.g. 0.9.0), drop the 0.8.x blocks and keep the trailing `Earlier releases: https://github.com/nkarasiak/qgis-mcp/releases` line. Before dropping a block, make sure its text is on the matching GitHub release — the release Action creates the release with an **empty body**, so notes only exist there if they were added by hand (v0.7.0, v0.7.1 and v0.8.0 are currently empty; the old text is recoverable from `git show v0.8.0:qgis_mcp_plugin/metadata.txt`).
+
 **Release work lands on `dev` and is tagged there, but `uvx git+...` installs the server from the default branch `main`.** Before tagging a release, fast-forward `dev` → `main` (`git merge --ff-only origin/dev`) so the published server code matches the plugin — bumping only the version string on `main` makes `diagnose` falsely report `ok` while the new tools are missing (see issue #10).
 
 ## Linting Before Plugin Upload
