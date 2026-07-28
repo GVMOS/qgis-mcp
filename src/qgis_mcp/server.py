@@ -17,8 +17,13 @@ from contextlib import asynccontextmanager
 from logging.handlers import RotatingFileHandler
 from typing import Any
 
-from mcp.server.fastmcp import Context, FastMCP
-from mcp.server.fastmcp.prompts.base import UserMessage
+try:
+    from mcp.server.fastmcp import Context, FastMCP
+    from mcp.server.fastmcp.prompts.base import UserMessage
+except ModuleNotFoundError:  # mcp >= 2.0 renamed fastmcp -> mcpserver
+    from mcp.server.mcpserver import Context
+    from mcp.server.mcpserver import MCPServer as FastMCP
+    from mcp.server.mcpserver.prompts.base import UserMessage
 from mcp.types import (
     Annotations,
     Completion,

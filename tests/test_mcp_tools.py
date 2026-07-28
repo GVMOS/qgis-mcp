@@ -1919,9 +1919,7 @@ async def test_compound_tools_expose_params_object():
     A `**kwargs` signature degenerates into a required string named `kwargs`,
     which makes every parameterised action uncallable.
     """
-    from mcp.server.fastmcp import FastMCP
-
-    from qgis_mcp.compound_tools import register_compound_tools
+    from qgis_mcp.compound_tools import FastMCP, register_compound_tools
 
     mcp = FastMCP("compound-schema-test")
     register_compound_tools(
@@ -1933,10 +1931,12 @@ async def test_compound_tools_expose_params_object():
     tools = await mcp.list_tools()
     assert tools
     for tool in tools:
-        props = tool.inputSchema["properties"]
+        # mcp >= 2.0 renamed Tool.inputSchema -> Tool.input_schema
+        schema = getattr(tool, "input_schema", None) or tool.inputSchema
+        props = schema["properties"]
         assert "kwargs" not in props, f"{tool.name} still exposes **kwargs"
         assert set(props) == {"action", "params"}, tool.name
-        assert tool.inputSchema.get("required") == ["action"], tool.name
+        assert schema.get("required") == ["action"], tool.name
         # params must accept an arbitrary object (nullable, defaulted)
         variants = props["params"].get("anyOf", [props["params"]])
         assert any(v.get("type") == "object" for v in variants), tool.name
@@ -1945,9 +1945,7 @@ async def test_compound_tools_expose_params_object():
 @pytest.mark.asyncio
 async def test_compound_tool_forwards_params_to_send():
     """Parameters passed inside `params` must reach the underlying command."""
-    from mcp.server.fastmcp import FastMCP
-
-    from qgis_mcp.compound_tools import register_compound_tools
+    from qgis_mcp.compound_tools import FastMCP, register_compound_tools
 
     send = AsyncMock(return_value={"expression": "2+3", "result": 5})
     mcp = FastMCP("compound-call-test")
@@ -2086,9 +2084,7 @@ def test_compound_mode_covers_every_granular_command():
 @pytest.mark.asyncio
 async def test_compound_new_groups_registered():
     """The field/analysis groups and the extended layer/processing actions exist."""
-    from mcp.server.fastmcp import FastMCP
-
-    from qgis_mcp.compound_tools import register_compound_tools
+    from qgis_mcp.compound_tools import FastMCP, register_compound_tools
 
     mcp = FastMCP("compound-groups-test")
     register_compound_tools(
@@ -2105,17 +2101,16 @@ async def test_compound_new_groups_registered():
 @pytest.mark.asyncio
 async def test_compound_field_and_analysis_dispatch():
     """New actions must forward their params to the right plugin command."""
-    from mcp.server.fastmcp import FastMCP
-    from mcp.shared.memory import create_connected_server_and_client_session as connect
+    from mcp_compat import connect
 
-    from qgis_mcp.compound_tools import register_compound_tools
+    from qgis_mcp.compound_tools import FastMCP, register_compound_tools
 
     send = AsyncMock(return_value={"ok": True})
     mcp = FastMCP("compound-dispatch-test")
     register_compound_tools(mcp, _send=send, _confirm_destructive=AsyncMock(return_value=True))
 
     # ctx.info() on some actions needs a live request context.
-    async with connect(mcp._mcp_server) as client:
+    async with connect(mcp) as client:
         await client.call_tool(
             "field",
             {

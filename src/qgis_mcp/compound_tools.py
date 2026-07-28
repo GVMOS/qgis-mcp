@@ -10,7 +10,11 @@ dispatches to the same ``_send()`` logic used by the granular tools.
 
 from typing import Any
 
-from mcp.server.fastmcp import Context, FastMCP
+try:
+    from mcp.server.fastmcp import Context, FastMCP
+except ModuleNotFoundError:  # mcp >= 2.0 renamed fastmcp -> mcpserver
+    from mcp.server.mcpserver import Context
+    from mcp.server.mcpserver import MCPServer as FastMCP
 from mcp.types import Annotations, ImageContent, ToolAnnotations
 
 from qgis_mcp.helpers import (

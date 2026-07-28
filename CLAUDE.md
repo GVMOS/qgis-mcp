@@ -66,7 +66,7 @@ See the `qgis-mcp-tools` skill (`.claude/skills/qgis-mcp-tools/SKILL.md`) for th
 
 - **Python version**: 3.12
 - **Package manager**: uv (pyproject.toml based)
-- **Main dependency**: `mcp[cli]>=1.20.0` (v1.26.0 installed)
+- **Main dependency**: `mcp[cli]>=1.20.0,<3` (v1.26.0 locked). mcp 2.0 renamed `mcp.server.fastmcp` → `mcp.server.mcpserver` (`FastMCP` → `MCPServer`), so `server.py` and `compound_tools.py` import it through a try/except shim and the rest of the code keeps the `FastMCP` name. `Tool.inputSchema` became `Tool.input_schema`, and `mcp.shared.memory.create_connected_server_and_client_session` is gone — `tests/mcp_compat.py` papers over both for tests. CI runs the unit suite against both the locked mcp and the newest release (issue #25).
 - **Dev dependencies**: `pytest>=7.0`, `pytest-asyncio>=0.23`
 - **Socket protocol**: Length-prefixed framing over TCP. Each message: 4-byte big-endian uint32 length header + JSON payload bytes. Client sends `{"type": "<command>", "params": {...}}`, server responds `{"status": "success"|"error", "result": ...}`.
 - **Connection management**: MCP server validates connection via `getpeername()`. Host/port configurable via `QGIS_MCP_HOST`/`QGIS_MCP_PORT` env vars. QGIS plugin supports up to 10 concurrent clients (e.g. multiple Claude Code instances each spawning their own MCP server process).
