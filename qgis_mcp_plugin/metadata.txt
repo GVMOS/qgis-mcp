@@ -19,7 +19,7 @@ about=Socket server plugin that exposes QGIS operations to LLMs through the
     - Non-blocking TCP socket server with length-prefixed framing
     - Toolbar button with port configuration dropdown
 
-version=0.7.1
+version=0.8.0
 author=Nicolas Karasiak
 email=nicart@gmail.com
 tags=mcp,ai,claude,llm,automation,socket,remote
@@ -31,7 +31,22 @@ category=Plugins
 icon=icons/icon.png
 experimental=False
 deprecated=False
-changelog=0.7.1 : Add opencode installer client and Hermes desktop app (Windows)
+changelog=0.8.0 : Fix compound tool mode being unusable — every handler took
+    **kwargs, which FastMCP/pydantic cannot express in JSON Schema and degraded
+    to a single required string, so no action could receive parameters; handlers
+    now take an explicit params object ({"action": "load", "params": {...}})
+    (thanks @kintopp, #24). Compound mode also reaches every granular command
+    again: new field and analysis groups, plus layer export/add_web/save_style/
+    apply_style/add_join and processing execute_batch/get_providers/list_models/
+    run_model. Fix execute_sql failing whenever any raster layer was loaded (all
+    project layers were added as virtual-layer sources); non-vector layers are
+    now skipped. Fix NaN/Infinity being written to the socket as bare tokens,
+    which is invalid JSON — non-finite floats serialise as null and
+    get_layer_extent reports {"empty": true} for a layer with no features. Fix
+    batch results failing return validation in compound mode. run_model now
+    defaults missing output/sink parameters to a temporary layer instead of
+    aborting.
+    0.7.1 : Add opencode installer client and Hermes desktop app (Windows)
     support; Hermes uses a generated .bat launcher that clears venv vars before
     invoking uvx to avoid a pydantic/mcp import clash; plugin Setup &
     Configurator gains a hermes entry; new docs/agent-integration.md guide

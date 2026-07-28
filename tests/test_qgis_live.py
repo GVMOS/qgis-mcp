@@ -691,3 +691,99 @@ def test_duplicate_layer(client, setup_test_data):
 def test_set_layer_order(client, setup_test_data):
     resp = client.send_command("set_layer_order", {"layer_ids": [setup_test_data]})
     assert resp["status"] == "success"
+
+
+def test_execute_sql_ignores_non_vector_layers(client, setup_test_data):
+    """A loaded raster must not invalidate the virtual layer (default source list)."""
+    import tempfile
+
+    tif = os.path.join(tempfile.gettempdir(), f"sqltest_{uuid.uuid4().hex[:8]}.tif")
+    resp = client.send_command(
+        "execute_processing",
+        {
+            "algorithm": "native:createconstantrasterlayer",
+            "parameters": {
+                "EXTENT": "0,4,44,48 [EPSG:4326]",
+                "TARGET_CRS": "EPSG:4326",
+                "PIXEL_SIZE": 0.5,
+                "NUMBER": 1,
+                "OUTPUT": tif,
+            },
+        },
+    )
+    assert resp["status"] == "success"
+    add = client.send_command("add_raster_layer", {"path": tif, "name": "sqltest_raster"})
+    assert add["status"] == "success"
+    raster_id = add["result"]["id"]
+    try:
+        layers_resp = client.send_command("get_layers")
+        layer = next(
+            lyr for lyr in layers_resp["result"]["layers"] if lyr["id"] == setup_test_data
+        )
+        resp = client.send_command(
+            "execute_sql", {"query": f'select count(*) as n from "{layer["name"]}"'}
+        )
+        assert resp["status"] == "success", resp.get("message")
+        assert resp["result"]["rows"][0]["n"] == 5
+
+        # An explicitly requested raster is a hard error, not a silent skip.
+        resp = client.send_command(
+            "execute_sql", {"query": "select 1", "layers": [raster_id]}
+        )
+        assert resp["status"] == "error"
+        assert "not a vector layer" in resp["message"]
+    finally:
+        client.send_command("remove_layer", {"layer_id": raster_id})
+
+
+def test_layer_extent_empty_layer_is_json_safe(client):
+    """An empty layer has a NaN extent — it must serialise as null, not NaN."""
+    resp = client.send_command(
+        "create_memory_layer",
+        {"name": f"empty_{uuid.uuid4().hex[:8]}", "geometry_type": "Point", "crs": "EPSG:4326"},
+    )
+    assert resp["status"] == "success"
+    layer_id = resp["result"]["id"]
+    try:
+        resp = client.send_command("get_layer_extent", {"layer_id": layer_id})
+        assert resp["status"] == "success"
+        assert resp["result"]["empty"] is True
+        assert resp["result"]["xmin"] is None
+
+        # A single point is a real (zero-area) extent, not an empty one.
+        client.send_command(
+            "add_features",
+            {"layer_id": layer_id, "features": [{"geometry_wkt": "POINT(1 45)"}]},
+        )
+        resp = client.send_command("get_layer_extent", {"layer_id": layer_id})
+        assert resp["status"] == "success"
+        assert resp["result"].get("empty") is None
+        assert resp["result"]["xmin"] == 1.0
+        assert resp["result"]["ymax"] == 45.0
+    finally:
+        client.send_command("remove_layer", {"layer_id": layer_id})
+
+
+def test_run_model_defaults_destination_parameters(client, setup_test_data):
+    """Omitting a model's sink parameter must not abort the run."""
+    name = f"livemodel_{uuid.uuid4().hex[:6]}"
+    resp = client.send_command(
+        "create_processing_model",
+        {
+            "name": name,
+            "inputs": [{"name": "src", "type": "vector"}],
+            "steps": [
+                {
+                    "id": "buf",
+                    "algorithm": "native:buffer",
+                    "parameters": {"INPUT": "@src", "DISTANCE": 0.1},
+                }
+            ],
+        },
+    )
+    assert resp["status"] == "success", resp.get("message")
+    model_name = resp["result"]["name"]
+    resp = client.send_command(
+        "run_model", {"model": f"model:{model_name}", "parameters": {"src": setup_test_data}}
+    )
+    assert resp["status"] == "success", resp.get("message")

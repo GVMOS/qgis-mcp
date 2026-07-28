@@ -1356,7 +1356,7 @@ async def set_project_crs(ctx: Context, crs: str) -> list:
     "(execute_code, remove_layer, delete_features, set_setting, reload_plugin) "
     "are not allowed in batch — use them individually.",
 )
-async def batch_commands(ctx: Context, commands: list[dict]) -> dict:
+async def batch_commands(ctx: Context, commands: list[dict]) -> list[dict[str, Any]]:
     for cmd in commands:
         cmd_type = cmd.get("type", "")
         if cmd_type in BATCH_BLOCKED_COMMANDS:

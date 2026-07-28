@@ -261,13 +261,19 @@ All tools are async with human-readable titles and annotations (`readOnly`, `des
 
 ### Compound tool mode
 
-Set `QGIS_MCP_TOOL_MODE=compound` to reduce the granular tools to ~23 grouped tools, cutting schema overhead per LLM turn. Each compound tool takes an `action` parameter:
+Set `QGIS_MCP_TOOL_MODE=compound` to reduce the granular tools to 25 grouped tools (every granular command stays reachable), cutting schema overhead per LLM turn. Each compound tool takes an `action` parameter plus a `params` object holding that action's parameters:
 
 ```bash
 QGIS_MCP_TOOL_MODE=compound uv run --no-sync src/qgis_mcp/server.py
 ```
 
-Groups: `system`, `project`, `layer`, `features`, `selection`, `style`, `canvas`, `render`, `processing`, `code`, `batch`, `layer_tree`, `plugins`, `variables`, `settings`, `expression`, `transform`, `message_log`, `layer_property`.
+```json
+{ "action": "load", "params": { "path": "/data/city.qgz" } }
+```
+
+Omit `params` for actions that take none (`{"action": "ping"}`).
+
+Groups: `system`, `project`, `layer`, `features`, `selection`, `style`, `canvas`, `render`, `processing`, `code`, `batch`, `layer_tree`, `plugins`, `variables`, `settings`, `expression`, `query`, `transform`, `message_log`, `layer_property`, `field`, `analysis`, `bookmarks`, `map_themes`, `active_layer`.
 
 ## Configuration
 
@@ -279,7 +285,7 @@ Groups: `system`, `project`, `layer`, `features`, `selection`, `style`, `canvas`
 | `QGIS_MCP_TRANSPORT` | `stdio` | MCP transport: `stdio` or `streamable-http` |
 | `QGIS_MCP_LOG_FILE` | `~/.local/share/qgis-mcp/server.log` | Log file path (empty to disable) |
 | `QGIS_MCP_LOG_LEVEL` | `INFO` | File log level |
-| `QGIS_MCP_TOOL_MODE` | `granular` | `granular` (102 tools) or `compound` (~23 grouped) |
+| `QGIS_MCP_TOOL_MODE` | `granular` | `granular` (103 tools) or `compound` (25 grouped) |
 
 ### Authentication
 
