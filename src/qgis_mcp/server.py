@@ -24,6 +24,10 @@ except ModuleNotFoundError:  # mcp >= 2.0 renamed fastmcp -> mcpserver
     from mcp.server.mcpserver import Context
     from mcp.server.mcpserver import MCPServer as FastMCP
     from mcp.server.mcpserver.prompts.base import UserMessage
+try:
+    from mcp.shared.exceptions import McpError
+except ImportError:  # mcp >= 2.0 renamed McpError -> MCPError
+    from mcp.shared.exceptions import MCPError as McpError
 from mcp.types import (
     Annotations,
     Completion,
@@ -31,6 +35,7 @@ from mcp.types import (
     ImageContent,
     ToolAnnotations,
 )
+from pydantic import BaseModel, Field
 
 from qgis_mcp.client import QgisMCPClient
 from qgis_mcp.helpers import (
@@ -244,6 +249,12 @@ async def _send(command_type: str, params: dict | None = None, timeout: int = 30
 # ---------------------------------------------------------------------------
 
 
+class _ConfirmSchema(BaseModel):
+    """Response schema for destructive-operation confirmation."""
+
+    confirm: bool = Field(description="Confirm this operation")
+
+
 async def _confirm_destructive(ctx: Context, message: str) -> bool:
     """Ask user for confirmation before destructive operation.
 
@@ -252,25 +263,15 @@ async def _confirm_destructive(ctx: Context, message: str) -> bool:
     can gate execution at the tool-call level.
     """
     try:
-        response = await ctx.elicit(
-            message=message,
-            schema={
-                "type": "object",
-                "properties": {
-                    "confirm": {
-                        "type": "boolean",
-                        "description": "Confirm this operation",
-                    },
-                },
-                "required": ["confirm"],
-            },
-        )
-        return response.action == "accept" and bool(response.data.get("confirm"))
-    except Exception:
+        response = await ctx.elicit(message=message, schema=_ConfirmSchema)
+    except McpError:
         # Client doesn't support elicitation — proceed (fail-open).
         # The destructive ToolAnnotations hint lets clients gate at call time.
+        # Only McpError is caught: a malformed elicit() call must not read as
+        # "unsupported" and silently skip every confirmation (#27).
         logger.info("Elicitation not supported by client, proceeding with operation")
         return True
+    return response.action == "accept" and bool(response.data and response.data.confirm)
 
 
 # ---------------------------------------------------------------------------

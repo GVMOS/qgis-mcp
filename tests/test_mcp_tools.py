@@ -9,8 +9,10 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
+from mcp_compat import make_mcp_error
+
 from qgis_mcp.helpers import HEADER_STRUCT, get_auth_token
-from qgis_mcp.server import QgisMCPClient, _send_sync
+from qgis_mcp.server import QgisMCPClient, _ConfirmSchema, _send_sync
 
 # --- Fixtures ---
 
@@ -29,7 +31,12 @@ def _make_ctx(*, elicitation="confirm"):
     """Create a mock Context with async methods.
 
     elicitation: "confirm" (default) — user confirms destructive ops.
-                 "unsupported" — client doesn't support elicitation (raises).
+                 "decline" — user refuses.
+                 "unsupported" — client doesn't support elicitation (raises McpError).
+
+    The responses mirror the real SDK: `data` is a model instance (not a dict),
+    and an unsupported client raises McpError — mocking a bare Exception with a
+    dict payload is what let #27 hide.
     """
     ctx = MagicMock()
     ctx.report_progress = AsyncMock()
@@ -37,11 +44,11 @@ def _make_ctx(*, elicitation="confirm"):
     ctx.warning = AsyncMock()
     ctx.error = AsyncMock()
     if elicitation == "unsupported":
-        ctx.elicit = AsyncMock(side_effect=Exception("Elicitation not supported"))
+        ctx.elicit = AsyncMock(side_effect=make_mcp_error())
     else:
         elicit_response = MagicMock()
-        elicit_response.action = "accept"
-        elicit_response.data = {"confirm": True}
+        elicit_response.action = "accept" if elicitation == "confirm" else "decline"
+        elicit_response.data = _ConfirmSchema(confirm=elicitation == "confirm")
         ctx.elicit = AsyncMock(return_value=elicit_response)
     return ctx
 
@@ -1047,7 +1054,7 @@ async def test_remove_layer_cancelled_by_user(mock_connection):
     ctx = _make_ctx()
     elicit_response = MagicMock()
     elicit_response.action = "accept"
-    elicit_response.data = {"confirm": False}
+    elicit_response.data = _ConfirmSchema(confirm=False)
     ctx.elicit = AsyncMock(return_value=elicit_response)
     output = await remove_layer(ctx, layer_id="test_layer")
     assert output == {"ok": False, "message": "Cancelled by user"}
@@ -1063,7 +1070,7 @@ async def test_remove_layer_confirmed_by_user(mock_connection):
     ctx = _make_ctx()
     elicit_response = MagicMock()
     elicit_response.action = "accept"
-    elicit_response.data = {"confirm": True}
+    elicit_response.data = _ConfirmSchema(confirm=True)
     ctx.elicit = AsyncMock(return_value=elicit_response)
     output = await remove_layer(ctx, layer_id="test_layer")
     assert output == {"ok": True}
@@ -1910,6 +1917,58 @@ def test_compound_tools_register():
 
     # Should have registered ~19 compound tools (15 main + 4 additional)
     assert mock_mcp.tool.call_count >= 14
+
+
+@pytest.mark.asyncio
+async def test_destructive_tool_actually_elicits(mock_connection):
+    """Regression for #27: the confirmation prompt must reach the client.
+
+    A dict passed where `ctx.elicit` wants a pydantic model raised before any
+    request was sent, and the blanket `except Exception` reported that as
+    "client doesn't support elicitation" and proceeded anyway.
+    """
+    from mcp.types import ElicitResult
+    from mcp_compat import connect
+
+    from qgis_mcp.server import mcp
+
+    mock_connection.send_command.return_value = {"status": "success", "result": {"ok": True}}
+    asked = []
+
+    async def elicitation_callback(context, params):
+        asked.append(params.message)
+        return ElicitResult(action="accept", content={"confirm": False})  # refuse
+
+    async with connect(mcp, elicitation_callback=elicitation_callback) as client:
+        result = await client.call_tool("remove_layer", {"layer_id": "L1"})
+
+    assert len(asked) == 1, "client was never asked to confirm"
+    assert "L1" in asked[0]
+    # Refusing must stop the command from reaching QGIS.
+    assert mock_connection.send_command.call_count == 0
+    assert "cancelled" in result.content[0].text.lower()
+
+
+@pytest.mark.asyncio
+async def test_confirm_destructive_declined_blocks_send(mock_connection):
+    """A declined confirmation must abort rather than fall through to fail-open."""
+    from qgis_mcp.server import remove_layer
+
+    mock_connection.send_command.return_value = {"status": "success", "result": {"ok": True}}
+    output = await remove_layer(_make_ctx(elicitation="decline"), layer_id="L1")
+    assert output["ok"] is False
+    assert mock_connection.send_command.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_confirm_destructive_reraises_non_mcp_errors(mock_connection):
+    """Only McpError means "unsupported"; anything else must surface (#27)."""
+    from qgis_mcp.server import _confirm_destructive
+
+    ctx = _make_ctx()
+    ctx.elicit = AsyncMock(side_effect=AttributeError("'dict' object has no attribute ..."))
+    with pytest.raises(AttributeError):
+        await _confirm_destructive(ctx, "Remove layer?")
 
 
 @pytest.mark.asyncio
