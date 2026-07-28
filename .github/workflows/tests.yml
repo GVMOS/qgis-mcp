@@ -1,0 +1,48 @@
+name: Tests
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+  schedule:
+    # Weekly, so a new mcp SDK release surfaces here and not in an issue (#25)
+    - cron: "0 6 * * 1"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: locked
+            # Exactly what uv.lock pins — what contributors and the plugin see
+            resolution: locked
+          - name: latest-mcp
+            # Unpinned, like `uvx --from <zip>`: catches SDK breaking changes
+            resolution: latest
+    name: ${{ matrix.name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Install (locked)
+        if: matrix.resolution == 'locked'
+        run: uv sync --frozen
+
+      - name: Install (latest mcp)
+        if: matrix.resolution == 'latest'
+        run: |
+          uv sync --frozen
+          uv pip install --upgrade "mcp[cli]"
+          uv pip show mcp | grep -i version
+
+      - name: Lint
+        if: matrix.resolution == 'locked'
+        run: |
+          uvx ruff check qgis_mcp_plugin/ src/ tests/
+          uvx flake8 qgis_mcp_plugin/   # W503 on, mirrors the plugin uploader
+
+      - name: Unit tests (mocked socket, no QGIS)
+        run: uv run --no-sync pytest tests/test_mcp_tools.py -v
