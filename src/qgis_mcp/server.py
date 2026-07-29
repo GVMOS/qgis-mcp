@@ -253,10 +253,12 @@ def get_qgis_connection(instance: str = DEFAULT_INSTANCE) -> QgisMCPClient:
 
     conn = QgisMCPClient(host=host, port=port)
     if not conn.connect():
+        # Chain the underlying error so _send_sync can tell a refusal (nothing
+        # listening, retrying is pointless) from a timeout (host may be slow).
         raise ConnectionError(
             f"Could not connect to QGIS instance {instance!r} at {host}:{port}. "
             "Make sure the QGIS plugin is running."
-        )
+        ) from conn.last_error
     _qgis_connections[instance] = conn
     _connection_validated_at[instance] = time.monotonic()
     logger.info(f"Created new persistent connection to QGIS instance {instance!r} at {host}:{port}")
@@ -272,9 +274,13 @@ def _probe_instance(instance: str, host: str, port: int, timeout: float = 1.0) -
     unreachable instance take ~11s.
     """
     conn = _qgis_connections.get(instance)
-    if conn is not None and conn.socket is not None:
+    # Bind the socket once: disconnect() sets it to None, so re-reading the
+    # attribute after the guard can hand us None and raise AttributeError, which
+    # suppress(OSError) would not catch.
+    sock = conn.socket if conn is not None else None
+    if sock is not None:
         with contextlib.suppress(OSError):
-            conn.socket.getpeername()
+            sock.getpeername()
             return True
     try:
         with socket.create_connection((host, port), timeout=timeout):
@@ -306,6 +312,17 @@ _FIRST_CONNECT_DELAYS = (1.0, 2.0, 3.0, 5.0)  # escalating backoff
 _first_connected: set[str] = set()  # instance names that have connected at least once
 
 
+def _is_refusal(exc: Exception) -> bool:
+    """True when the host actively refused, i.e. nothing is listening on that port.
+
+    get_qgis_connection() chains the client's error, so check the cause as well as
+    the exception itself.
+    """
+    return isinstance(exc, ConnectionRefusedError) or isinstance(
+        exc.__cause__, ConnectionRefusedError
+    )
+
+
 def _send_sync(
     command_type: str,
     params: dict | None = None,
@@ -314,20 +331,25 @@ def _send_sync(
 ) -> dict:
     """Send a command synchronously to *instance* and return the unwrapped result.
 
-    ``instance=None`` targets the ``default`` instance. Holds that instance's
-    lock for the entire send+recv cycle so that concurrent asyncio.to_thread
-    calls cannot interleave frames on its shared socket; other instances are
-    unaffected.
+    ``instance=None`` resolves per :func:`implicit_instance` — the entry named
+    ``default`` when present, otherwise the first one configured. Holds that
+    instance's lock for the entire send+recv cycle so that concurrent
+    asyncio.to_thread calls cannot interleave frames on its shared socket; other
+    instances are unaffected.
 
-    Retries on connection/socket errors with increasing delays. Uses a more
-    patient retry schedule for the first connection (QGIS may still be starting),
-    then shorter retries for subsequent reconnections (stale socket, plugin restart).
-    The first-connect state is tracked per instance.
+    Retries on connection/socket errors with increasing delays. The patient
+    schedule applies only while ``_first_connected`` is empty: nothing has
+    answered yet, so QGIS or the plugin may still be starting and waiting is
+    right. Once any instance has connected the stack is demonstrably up, so an
+    unreachable instance is a closed window rather than a slow start and the
+    short schedule applies. Keying this off the first connection to *any*
+    instance rather than to this one keeps a routine call to a closed instance
+    from costing ~21s every single time.
     """
     name = resolve_instance(instance)
     last_exc: Exception | None = None
 
-    if name in _first_connected:
+    if _first_connected:
         max_retries = _MAX_RETRIES
         delays = _RETRY_DELAYS
     else:
@@ -344,6 +366,15 @@ def _send_sync(
             except _CONNECTION_ERRORS as exc:
                 last_exc = exc
                 _invalidate_connection(name)
+                if _first_connected and _is_refusal(exc):
+                    # The host answered: nothing is listening on that port. Another
+                    # instance has already connected, so this is a closed QGIS
+                    # window rather than a slow start, and retrying only repeats
+                    # the OS's ~2s refusal latency. Fail on the first attempt.
+                    logger.warning(
+                        "Instance %r refused the connection — not retrying (%s)", name, exc
+                    )
+                    raise
                 if attempt < max_retries - 1:
                     delay = delays[min(attempt, len(delays) - 1)]
                     logger.warning(
@@ -2546,7 +2577,34 @@ def _strip_schema_titles() -> None:
         clean(tool.parameters)
 
 
+def _strip_instance_param() -> None:
+    """Drop the ``instance`` property from tool schemas when only one exists.
+
+    With a single instance there is nothing to route, so advertising ``instance``
+    on every tool is pure overhead: it grows the tool list sent on every turn by
+    ~17% (45.8k -> 53.7k chars) for the majority of users, who run one QGIS. The
+    Python parameter stays and keeps defaulting to None, which resolves to that
+    single instance, so behaviour is identical — only the advertised schema
+    shrinks. Restored as soon as a second instance is configured.
+
+    Same mechanism as _strip_schema_titles() above, and applied after it.
+    """
+    try:
+        if len(get_instances()) > 1:
+            return
+    except ValueError:
+        # An invalid configuration surfaces on the first tool call, as in the
+        # lifespan handler — don't decide anything here.
+        return
+
+    for tool in mcp._tool_manager._tools.values():
+        properties = tool.parameters.get("properties")
+        if properties:
+            properties.pop("instance", None)
+
+
 _strip_schema_titles()
+_strip_instance_param()
 
 
 # ===========================================================================
@@ -2589,8 +2647,16 @@ async def handle_completion(ref, argument: CompletionArgument, context=None):
 # ===========================================================================
 
 
+# Resource URIs carry no instance segment, so all of these read the implicit
+# instance. With several instances configured that is a silent choice, so each
+# description says which one it reads and points at the tool for the rest.
+_IMPLICIT = " (implicit instance — use the equivalent tool with instance= for another)"
+
+
 @mcp.resource(
-    "qgis://info", name="qgis_info", description="QGIS version, profile, and plugin count"
+    "qgis://info",
+    name="qgis_info",
+    description="QGIS version, profile, and plugin count" + _IMPLICIT,
 )
 def qgis_info_resource() -> str:
     return json.dumps(_send_sync("get_qgis_info"))
@@ -2599,14 +2665,16 @@ def qgis_info_resource() -> str:
 @mcp.resource(
     "qgis://project",
     name="project_info",
-    description="Current project metadata, CRS, layer count, layer summary",
+    description="Current project metadata, CRS, layer count, layer summary" + _IMPLICIT,
 )
 def project_info_resource() -> str:
     return json.dumps(_send_sync("get_project_info"))
 
 
 @mcp.resource(
-    "qgis://layers", name="layer_list", description="All layers with IDs, names, types, visibility"
+    "qgis://layers",
+    name="layer_list",
+    description="All layers with IDs, names, types, visibility" + _IMPLICIT,
 )
 def layers_resource() -> str:
     return json.dumps(_send_sync("get_layers"))
@@ -2615,7 +2683,8 @@ def layers_resource() -> str:
 @mcp.resource(
     "qgis://layers/{layer_id}/info",
     name="layer_info",
-    description="Detailed layer info: CRS, extent, fields, feature count, source, provider",
+    description="Detailed layer info: CRS, extent, fields, feature count, source, provider"
+    + _IMPLICIT,
 )
 def layer_info_resource(layer_id: str) -> str:
     return json.dumps(_send_sync("get_layer_info", {"layer_id": layer_id}))
@@ -2624,7 +2693,7 @@ def layer_info_resource(layer_id: str) -> str:
 @mcp.resource(
     "qgis://layers/{layer_id}/features",
     name="layer_features",
-    description="Sample features (first 10) from a vector layer",
+    description="Sample features (first 10) from a vector layer" + _IMPLICIT,
 )
 def layer_features_resource(layer_id: str) -> str:
     return json.dumps(_send_sync("get_layer_features", {"layer_id": layer_id, "limit": 10}))
@@ -2633,7 +2702,7 @@ def layer_features_resource(layer_id: str) -> str:
 @mcp.resource(
     "qgis://layers/{layer_id}/schema",
     name="layer_schema",
-    description="Field names, types, and lengths for a vector layer",
+    description="Field names, types, and lengths for a vector layer" + _IMPLICIT,
 )
 def layer_schema_resource(layer_id: str) -> str:
     return json.dumps(_send_sync("get_layer_schema", {"layer_id": layer_id}))
