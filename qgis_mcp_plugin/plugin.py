@@ -1,5 +1,6 @@
 import base64
 import contextlib
+import errno
 import fnmatch
 import io
 import json
@@ -155,6 +156,8 @@ from .compat import (
 
 _DEFAULT_HOST = "localhost"
 _DEFAULT_PORT = 9876
+# errno for "address already in use": EADDRINUSE everywhere, WSAEADDRINUSE on Windows
+_ADDR_IN_USE = frozenset({errno.EADDRINUSE, 10048})
 _RECV_CHUNK_SIZE = 65536
 _MAX_MESSAGE_SIZE = 10 * 1024 * 1024  # 10 MB
 _HEADER_STRUCT = struct.Struct(">I")
@@ -193,6 +196,7 @@ class QgisMCPServer(QObject):
         self.clients: dict[socket.socket, bytes] = {}
         self.timer = None
         self._message_log = deque(maxlen=1000)
+        self.start_error = None  # why start() failed, for the UI to report
 
     def _notify_clients_changed(self):
         """Report the active client count to the UI (badge on the toolbar icon)."""
@@ -203,8 +207,20 @@ class QgisMCPServer(QObject):
     def start(self):
         """Start the server"""
         self.running = True
+        self.start_error = None
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        # SO_REUSEADDR does not mean the same thing on both platforms. On Windows
+        # it lets a second socket bind a port another socket already holds, so two
+        # QGIS windows on one user profile (which share the saved port in
+        # QgsSettings) would BOTH report "server started" on 9876 and one of them
+        # would silently swallow every connection — the wrong window answering with
+        # no error anywhere. SO_EXCLUSIVEADDRUSE is the Windows way to ask for what
+        # SO_REUSEADDR already gives us on Unix, and it still allows an immediate
+        # rebind after stop, which is why SO_REUSEADDR was here to begin with.
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):  # Windows only
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        else:
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
         try:
             self.socket.bind((self.host, self.port))
@@ -233,6 +249,12 @@ class QgisMCPServer(QObject):
             )
             return True
         except Exception as e:
+            self.start_error = str(e)
+            if isinstance(e, OSError) and e.errno in _ADDR_IN_USE:
+                self.start_error = (
+                    f"Port {self.port} is already in use — another QGIS window or program "
+                    "is on it. Pick a different port for this window."
+                )
             QgsMessageLog.logMessage(f"Failed to start server: {e!s}", self.LOG_TAG, MSG_CRITICAL)
             self.stop()
             return False
@@ -4156,6 +4178,11 @@ class QgisMCPPlugin:
                 self.action.setToolTip(f"MCP server running on :{port} — click to stop")
                 self.port_spin.setEnabled(False)
             else:
+                # Without this the button just pops back out and the only trace is a
+                # line in the message log, so a port clash looks like nothing happened.
+                reason = self.server.start_error or "unknown error"
+                with contextlib.suppress(Exception):
+                    self.iface.messageBar().pushWarning("QGIS MCP", reason)
                 self.server = None
                 self.action.setChecked(False)
         else:
