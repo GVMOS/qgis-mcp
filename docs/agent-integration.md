@@ -214,7 +214,7 @@ to get the full bat-file content and YAML snippet pre-filled with your local pat
 | `QGIS_MCP_TRANSPORT` | `stdio` | MCP transport: `stdio` or `streamable-http` |
 | `QGIS_MCP_LOG_FILE` | `~/.local/share/qgis-mcp/server.log` | Log file path (empty to disable) |
 | `QGIS_MCP_LOG_LEVEL` | `INFO` | File log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
-| `QGIS_MCP_TOOL_MODE` | `granular` | `granular` (103 tools) or `compound` (~23 grouped tools) |
+| `QGIS_MCP_TOOL_MODE` | `granular` | `granular` (103 tools) or `compound` (25 grouped tools) |
 
 ---
 
@@ -255,7 +255,8 @@ If the agent cannot spawn subprocesses but can make HTTP requests, set
 ## Compound tool mode
 
 If your agent has a limited context window or struggles with 103 separate tool schemas,
-enable compound tool mode to reduce the tool count to 23 grouped tools:
+enable compound tool mode to reduce the tool count to 25 grouped tools (no loss of
+functionality — every granular command is reachable through an action):
 
 ```json
 {
@@ -269,7 +270,26 @@ enable compound tool mode to reduce the tool count to 23 grouped tools:
 }
 ```
 
-Each compound tool takes an `action` parameter to select the operation.  The groups are:
-`system`, `project`, `layer`, `features`, `selection`, `style`, `canvas`, `render`,
-`processing`, `code`, `batch`, `layer_tree`, `plugins`, `variables`, `settings`,
-`expression`, `transform`, `message_log`, `layer_property`.
+Each compound tool takes two arguments: `action` (string, required) selects the operation,
+and `params` (object, optional) carries that action's parameters.  Parameters are **not**
+top-level tool arguments — they always go inside `params`:
+
+```json
+{
+  "name": "project",
+  "arguments": { "action": "load", "params": { "path": "/data/city.qgz" } }
+}
+```
+
+```json
+{
+  "name": "expression",
+  "arguments": { "action": "evaluate", "params": { "expression": "2 + 3" } }
+}
+```
+
+Omit `params` entirely for actions that take none (`{"action": "ping"}`).  Each tool's
+description lists the accepted keys per action.
+
+The groups are:
+`system`, `project`, `layer`, `features`, `selection`, `style`, `canvas`, `render`, `processing`, `code`, `batch`, `layer_tree`, `plugins`, `variables`, `settings`, `expression`, `query`, `transform`, `message_log`, `layer_property`, `field`, `analysis`, `bookmarks`, `map_themes`, `active_layer`.

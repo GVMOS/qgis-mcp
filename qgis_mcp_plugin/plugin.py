@@ -3,6 +3,7 @@ import contextlib
 import fnmatch
 import io
 import json
+import math
 import os
 import re
 import secrets
@@ -161,6 +162,22 @@ _MAX_MESSAGE_SIZE = 10 * 1024 * 1024  # 10 MB
 _HEADER_STRUCT = struct.Struct(">I")
 
 
+def _json_safe(value):
+    """Replace non-finite floats with None so responses stay valid JSON.
+
+    ``json.dumps`` emits bare ``NaN``/``Infinity`` tokens, which are not valid
+    JSON and are rejected by strict parsers. Empty layers (extent of a layer
+    with no features) and raster stats with no data both produce them.
+    """
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    return value
+
+
 class QgisMCPServer(QObject):
     """Server class to handle socket connections and execute QGIS commands"""
 
@@ -258,7 +275,7 @@ class QgisMCPServer(QObject):
 
     def _send_response(self, client_sock, response):
         """Send a length-prefixed JSON response to a client."""
-        resp_bytes = json.dumps(response).encode("utf-8")
+        resp_bytes = json.dumps(_json_safe(response)).encode("utf-8")
         header = _HEADER_STRUCT.pack(len(resp_bytes))
         client_sock.sendall(header + resp_bytes)
 
@@ -1179,16 +1196,30 @@ class QgisMCPServer(QObject):
         layer = self._get_vector_layer(layer_id)
         dp = layer.dataProvider()
         qgs_features = []
-        for feat_data in features:
+        for i, feat_data in enumerate(features):
+            unknown = sorted(set(feat_data) - {"attributes", "geometry_wkt"})
+            if unknown:
+                raise Exception(
+                    f"Feature {i}: unknown key(s) {unknown} - expected "
+                    "'attributes' and/or 'geometry_wkt'"
+                )
             f = QgsFeature(layer.fields())
             attrs = feat_data.get("attributes", {})
             for field_name, value in attrs.items():
                 idx = layer.fields().indexOf(field_name)
-                if idx >= 0:
-                    f.setAttribute(idx, value)
+                if idx < 0:
+                    names = [fld.name() for fld in layer.fields()]
+                    raise Exception(
+                        f"Feature {i}: no field '{field_name}' in layer "
+                        f"(fields: {names})"
+                    )
+                f.setAttribute(idx, value)
             wkt = feat_data.get("geometry_wkt")
             if wkt:
-                f.setGeometry(QgsGeometry.fromWkt(wkt))
+                geom = QgsGeometry.fromWkt(wkt)
+                if geom.isNull():
+                    raise Exception(f"Feature {i}: invalid geometry_wkt: {wkt!r}")
+                f.setGeometry(geom)
             qgs_features.append(f)
 
         ok, added = dp.addFeatures(qgs_features)
@@ -1201,14 +1232,27 @@ class QgisMCPServer(QObject):
         layer = self._get_vector_layer(layer_id)
         dp = layer.dataProvider()
         attr_map = {}
-        for upd in updates:
+        for i, upd in enumerate(updates):
+            unknown = sorted(set(upd) - {"fid", "attributes"})
+            if unknown:
+                raise Exception(
+                    f"Update {i}: unknown key(s) {unknown} - expected 'fid' and 'attributes'"
+                )
+            if "fid" not in upd:
+                raise Exception(f"Update {i}: missing 'fid'")
             fid = upd["fid"]
+            if not layer.getFeature(fid).isValid():
+                raise Exception(f"Update {i}: no feature with fid {fid} in layer")
             attrs = upd.get("attributes", {})
             field_map = {}
             for field_name, value in attrs.items():
                 idx = layer.fields().indexOf(field_name)
-                if idx >= 0:
-                    field_map[idx] = value
+                if idx < 0:
+                    names = [fld.name() for fld in layer.fields()]
+                    raise Exception(
+                        f"Update {i}: no field '{field_name}' in layer (fields: {names})"
+                    )
+                field_map[idx] = value
             if field_map:
                 attr_map[fid] = field_map
 
@@ -1996,6 +2040,20 @@ class QgisMCPServer(QObject):
 
         layer = project.mapLayer(layer_id)
         extent = layer.extent()
+        # A layer with no features has a null extent whose bounds are NaN;
+        # report it explicitly instead of leaking NaN to the client. Test the
+        # bounds themselves — QgsRectangle.isEmpty() is also true for the
+        # zero-area extent of a single-point layer, which is a real extent.
+        bounds = (extent.xMinimum(), extent.yMinimum(), extent.xMaximum(), extent.yMaximum())
+        if extent.isNull() or not all(math.isfinite(b) for b in bounds):
+            return {
+                "xmin": None,
+                "ymin": None,
+                "xmax": None,
+                "ymax": None,
+                "crs": layer.crs().authid(),
+                "empty": True,
+            }
         return {
             "xmin": extent.xMinimum(),
             "ymin": extent.yMinimum(),
@@ -3033,12 +3091,23 @@ class QgisMCPServer(QObject):
 
         project = QgsProject.instance()
         definition = QgsVirtualLayerDefinition()
+        explicit = bool(layers)
         src_ids = layers or list(project.mapLayers().keys())
+        sources = []
         for lid in src_ids:
             lyr = project.mapLayer(lid)
             if lyr is None:
                 raise Exception(f"Layer not found: {lid}")
+            # A virtual layer can only join vector sources; a raster (or any
+            # other layer type) makes the whole definition invalid.
+            if lyr.type() != LAYER_VECTOR:
+                if explicit:
+                    raise Exception(f"Layer '{lyr.name()}' is not a vector layer — cannot be queried")
+                continue
             definition.addSource(lyr.name(), lid)
+            sources.append(lyr.name())
+        if not sources:
+            raise Exception("No vector layers available to query")
         definition.setQuery(query)
         if geometry_field:
             definition.setGeometryField(geometry_field)
@@ -3048,7 +3117,10 @@ class QgisMCPServer(QObject):
             definition.setUid(uid_field)
         vlayer = QgsVectorLayer(definition.toString(), layer_name, "virtual")
         if not vlayer.isValid():
-            raise Exception(f"Invalid SQL/virtual layer for query: {query}")
+            raise Exception(
+                f"Invalid SQL/virtual layer for query: {query} "
+                f"(available table names: {sorted(sources)})"
+            )
         if as_layer:
             project.addMapLayer(vlayer)
             return {
@@ -3193,8 +3265,9 @@ class QgisMCPServer(QObject):
     def run_model(self, model, parameters=None, **kwargs):
         """Run a Processing model by registered id or by .model3 file path."""
         import processing
+        from qgis.core import QgsProcessingDestinationParameter
 
-        parameters = parameters or {}
+        parameters = dict(parameters or {})
         if isinstance(model, str) and model.lower().endswith(".model3"):
             alg = QgsProcessingModelAlgorithm()
             if not alg.fromFile(model):
@@ -3203,6 +3276,16 @@ class QgisMCPServer(QObject):
             target = alg
         else:
             target = model
+            alg = QgsApplication.processingRegistry().algorithmById(model)
+
+        # Destination (sink/output) parameters have no default, so omitting one
+        # aborts the run. The Processing GUI defaults them to a temporary layer;
+        # do the same so callers only have to supply the model's real inputs.
+        if alg is not None:
+            for param in alg.parameterDefinitions():
+                if isinstance(param, QgsProcessingDestinationParameter):
+                    parameters.setdefault(param.name(), "TEMPORARY_OUTPUT")
+
         result = processing.run(target, parameters)
         return {"model": model, "result": {k: str(v) for k, v in result.items()}}
 
