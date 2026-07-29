@@ -111,7 +111,7 @@ by asking the agent:
 List the available MCP tools for QGIS.
 ```
 
-You should see 103 tools (e.g. `ping`, `get_layers`, `render_map`, …).
+You should see 104 tools (e.g. `ping`, `get_layers`, `render_map`, …).
 
 ### Step 3 — Check the connection
 
@@ -210,11 +210,54 @@ to get the full bat-file content and YAML snippet pre-filled with your local pat
 |----------|---------|-------------|
 | `QGIS_MCP_HOST` | `localhost` | Host where the QGIS plugin socket listens |
 | `QGIS_MCP_PORT` | `9876` | Port for the QGIS plugin socket |
+| `QGIS_MCP_INSTANCES` | _(unset)_ | Address several QGIS windows from one server: `name=port` or `name=host:port`, comma-separated (e.g. `default=9876,b=9877`). Unset = one instance named `default` from `QGIS_MCP_HOST`/`QGIS_MCP_PORT`. See [Multiple QGIS instances](#multiple-qgis-instances). |
 | `QGIS_MCP_TOKEN` | _(unset)_ | Optional shared secret for socket auth |
 | `QGIS_MCP_TRANSPORT` | `stdio` | MCP transport: `stdio` or `streamable-http` |
 | `QGIS_MCP_LOG_FILE` | `~/.local/share/qgis-mcp/server.log` | Log file path (empty to disable) |
 | `QGIS_MCP_LOG_LEVEL` | `INFO` | File log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
-| `QGIS_MCP_TOOL_MODE` | `granular` | `granular` (103 tools) or `compound` (25 grouped tools) |
+| `QGIS_MCP_TOOL_MODE` | `granular` | `granular` (104 tools) or `compound` (25 grouped tools) |
+
+---
+
+## Multiple QGIS instances
+
+One MCP server registration can drive several running QGIS windows — no need to register
+the server once per port.  Start each QGIS with the plugin on its own port, then list them
+in `QGIS_MCP_INSTANCES`:
+
+```json
+{
+  "mcpServers": {
+    "qgis": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "https://github.com/nkarasiak/qgis-mcp/archive/refs/heads/main.zip",
+        "qgis-mcp-server"
+      ],
+      "env": {
+        "QGIS_MCP_INSTANCES": "default=9876,planning=9877,archive=lab-box:9878"
+      }
+    }
+  }
+}
+```
+
+- Every tool takes an optional `instance` argument: `get_layers(instance="planning")`.
+- `list_qgis_instances` reports the configured names, host, port, and whether each is
+  currently reachable.
+- An unknown name is rejected with the list of configured names.
+- Instance names match `[A-Za-z0-9_-]+`.  Entries without a host use `QGIS_MCP_HOST`
+  (default `localhost`).
+- Each instance keeps its own pooled socket and its own lock, so two instances can be
+  driven concurrently without blocking each other.
+- Omitting `instance` targets the entry named `default`; when no entry is called `default`,
+  the **first** entry listed is used, so `planning=9877,archive=9878` works without
+  renaming anything.
+- **Not supported with `QGIS_MCP_TOOL_MODE=compound`.**  Compound tools carry no `instance`
+  argument, so configuring more than one instance in compound mode refuses to start rather
+  than silently routing every call to one QGIS.
+- `QGIS_MCP_TOKEN` is shared by all instances — set the same secret in each QGIS.
 
 ---
 
@@ -254,7 +297,7 @@ If the agent cannot spawn subprocesses but can make HTTP requests, set
 
 ## Compound tool mode
 
-If your agent has a limited context window or struggles with 103 separate tool schemas,
+If your agent has a limited context window or struggles with 104 separate tool schemas,
 enable compound tool mode to reduce the tool count to 25 grouped tools (no loss of
 functionality — every granular command is reachable through an action):
 
