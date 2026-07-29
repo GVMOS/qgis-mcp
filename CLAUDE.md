@@ -12,7 +12,7 @@ The system has two components that communicate over a TCP socket (default `local
 
 1. **QGIS Plugin** (`qgis_mcp_plugin/plugin.py`) — Runs inside QGIS (3.28–4.x). A `QgisMCPServer` class creates a non-blocking TCP socket server using a `QTimer` (25ms poll interval) to accept connections and process JSON commands within QGIS's event loop. Includes a `QgisMCPDockWidget` UI for start/stop control, and `QgisMCPPlugin` as the standard QGIS plugin entry point (`classFactory`). All command handlers live in this file. A companion `compat.py` module provides enum compatibility between QGIS 3.x and 4.x (see below).
 
-2. **MCP Server** (`src/qgis_mcp/server.py`) — Runs outside QGIS as a standalone Python process. Uses `FastMCP` from the `mcp` library to expose QGIS operations as MCP tools, resources, and prompts. A `_send()` helper unwraps the response envelope and raises on errors. All 51 tools are `async` with `title=` for human-readable names. Uses `ToolAnnotations` for read-only/destructive/idempotent hints. Long-running tools use `ctx.info()` for MCP logging. Destructive tools use `ctx.elicit()` for user confirmation (with graceful fallback). An optional compound tool mode (`src/qgis_mcp/compound_tools.py`) groups tools into 25 compound tools for reduced schema overhead.
+2. **MCP Server** (`src/qgis_mcp/server.py`) — Runs outside QGIS as a standalone Python process. Uses `FastMCP` from the `mcp` library to expose QGIS operations as MCP tools, resources, and prompts. A `_send()` helper unwraps the response envelope and raises on errors. All 117 tools are `async` with `title=` for human-readable names. Uses `ToolAnnotations` for read-only/destructive/idempotent hints. Long-running tools use `ctx.info()` for MCP logging. Destructive tools use `ctx.elicit()` for user confirmation (with graceful fallback). An optional compound tool mode (`src/qgis_mcp/compound_tools.py`) groups tools into 27 compound tools for reduced schema overhead.
 
 **Data flow:** Claude → MCP Server (FastMCP) → TCP socket → QGIS Plugin (QTimer loop) → PyQGIS API → response back through socket.
 
@@ -33,7 +33,7 @@ QGIS_MCP_INSTANCES=default=9876,b=9877 uv run --no-sync src/qgis_mcp/server.py
 # Run with streamable HTTP transport (for remote/multi-client)
 QGIS_MCP_TRANSPORT=streamable-http uv run --no-sync src/qgis_mcp/server.py
 
-# Run with compound tool mode (reduces 104 tools to 25 grouped tools)
+# Run with compound tool mode (reduces 117 tools to 27 grouped tools)
 QGIS_MCP_TOOL_MODE=compound uv run --no-sync src/qgis_mcp/server.py
 
 # Run the multi-client installer (plugin symlink + MCP client config)
@@ -60,11 +60,11 @@ uv run --no-sync pytest tests/ -v
 | `QGIS_MCP_TRANSPORT` | `stdio` | MCP transport: `stdio` or `streamable-http` |
 | `QGIS_MCP_LOG_FILE` | `~/.local/share/qgis-mcp/server.log` | Log file path (empty to disable file logging) |
 | `QGIS_MCP_LOG_LEVEL` | `INFO` | File log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
-| `QGIS_MCP_TOOL_MODE` | `granular` | Tool registration mode: `granular` (104 tools) or `compound` (25 grouped tools) |
+| `QGIS_MCP_TOOL_MODE` | `granular` | Tool registration mode: `granular` (117 tools) or `compound` (27 grouped tools) |
 
 ## MCP Tools, Resources, Prompts, Protocol Features
 
-See the `qgis-mcp-tools` skill (`.claude/skills/qgis-mcp-tools/SKILL.md`) for the full tool table (103 tools), MCP resources, prompts, and protocol features (logging, elicitation, completions, annotations, compound mode).
+See the `qgis-mcp-tools` skill (`.claude/skills/qgis-mcp-tools/SKILL.md`) for the full tool table (117 tools), MCP resources, prompts, and protocol features (logging, elicitation, completions, annotations, compound mode).
 
 ## Key Details
 
@@ -77,6 +77,9 @@ See the `qgis-mcp-tools` skill (`.claude/skills/qgis-mcp-tools/SKILL.md`) for th
 - **Multi-instance**: `QGIS_MCP_INSTANCES` lets one server address several running QGIS windows. `get_instances()` resolves the config from the environment on every call; connections, TTL validation timestamps, first-connect retry state and locks are all keyed by instance name (`_qgis_connections`, `_connection_validated_at`, `_first_connected`, `_qgis_locks`), so two instances never serialize against each other. `_send_sync()`/`_send()` take a trailing `instance` argument and every `@mcp.tool` function forwards its own `instance: str | None = None` parameter (`test_every_tool_forwards_instance` enforces this for all of them). Unset env = one instance named `default`, identical to the previous behaviour. Instance-less calls resolve via `implicit_instance()`: the entry named `default` when present, otherwise the first entry in insertion order. Compound tool mode (`QGIS_MCP_TOOL_MODE=compound`) exposes no instance selection, so configuring more than one instance in that mode refuses to start (`SystemExit`) rather than routing every call to one QGIS.
 - **All tools async**: Every tool function is `async def` to enable `await ctx.info()`, `ctx.elicit()`, etc. The `_send_sync()` helper stays synchronous (blocking socket call — acceptable since responses are fast).
 - **Feature format**: Flat dicts with `_fid` (feature ID) and attributes at top level. Geometry in `_geometry` key when requested.
+- **Edit sessions**: `start_editing`/`commit_edits`/`rollback_edits`/`undo_edits`/`redo_edits` drive `QgsVectorLayer`'s edit buffer and undo stack. `add_features`, `update_features`, `delete_features` and `update_feature_geometry` check `layer.isEditable()` and use the layer-level API when a session is open (writes land in the buffer, undoable, discarded by rollback) and `dataProvider()` otherwise; every one of them reports which path it took via `buffered` in the response. Writing to the provider under an open session would land beneath the buffer and be lost.
+- **Database connections**: `list_connections`/`list_connection_tables`/`add_layer_from_connection`/`import_layer_to_connection`/`execute_connection_sql` wrap `QgsProviderRegistry.providerMetadata(...).connections()` and `QgsAbstractDatabaseProviderConnection` — the Browser panel's saved connections (PostGIS, GeoPackage, SpatiaLite, MS SQL, ...). Connection URIs are password-redacted (`_redact_uri`) before leaving the plugin. Import builds an OGR uri (container file + `layerName` option) for `ogr` connections and a `QgsDataSourceUri` for database providers, then calls `QgsVectorLayerExporter.exportLayer`.
+- **Raster styling**: `set_raster_style` covers `singleband_pseudocolor`, `singleband_gray`, `multiband_color` and `hillshade`; `set_layer_style` stays vector-only. Unset `min_value`/`max_value` fall back to `bandStatistics`.
 - **`get_layer_features` limit**: MCP tool caps at 50 features (default 10). Supports `expression` for server-side filtering.
 - **Batch support**: `batch` command type executes multiple commands in sequence, returns array of results.
 - **Configurable timeouts**: `execute_processing`, `render_map`, `execute_code` use 60s; others default to 30s.

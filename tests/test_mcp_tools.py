@@ -2761,3 +2761,153 @@ def test_two_instances_route_over_their_own_sockets():
             srv._invalidate_connection(name)
         srv._first_connected.difference_update({"default", "b"})
         stop.set()
+
+
+# --- Edit sessions, geometry writes, raster style, DB connections ---
+
+
+@pytest.mark.asyncio
+async def test_edit_session_lifecycle(mock_connection):
+    """start/commit go straight through; rollback is confirmation-gated."""
+    from qgis_mcp.server import commit_edits, rollback_edits, start_editing
+
+    mock_connection.send_command.return_value = {"status": "success", "result": {"ok": True}}
+    ctx = _make_ctx()
+    assert await start_editing(ctx, layer_id="lyr") == {"ok": True}
+    assert await commit_edits(ctx, layer_id="lyr") == {"ok": True}
+    assert await rollback_edits(ctx, layer_id="lyr") == {"ok": True}
+    assert [c[0][0] for c in mock_connection.send_command.call_args_list] == [
+        "start_editing",
+        "commit_edits",
+        "rollback_edits",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_rollback_edits_declined(mock_connection):
+    """A declined rollback must never reach the plugin — the buffer is unrecoverable."""
+    from qgis_mcp.server import rollback_edits
+
+    output = await rollback_edits(_make_ctx(elicitation="decline"), layer_id="lyr")
+    assert output == {"ok": False, "message": "Cancelled by user"}
+    mock_connection.send_command.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_undo_redo_edits(mock_connection):
+    from qgis_mcp.server import redo_edits, undo_edits
+
+    mock_connection.send_command.return_value = {"status": "success", "result": {"undone": 2}}
+    await undo_edits(_make_ctx(), layer_id="lyr", steps=2)
+    mock_connection.send_command.assert_called_with(
+        "undo_edits", {"layer_id": "lyr", "steps": 2}, timeout=30
+    )
+    await redo_edits(_make_ctx(), layer_id="lyr")
+    mock_connection.send_command.assert_called_with(
+        "redo_edits", {"layer_id": "lyr", "steps": 1}, timeout=30
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_feature_geometry_tool(mock_connection):
+    from qgis_mcp.server import update_feature_geometry
+
+    mock_connection.send_command.return_value = {"status": "success", "result": {"updated": 1}}
+    output = await update_feature_geometry(
+        _make_ctx(), layer_id="lyr", updates=[{"fid": 1, "geometry_wkt": "POINT(1 2)"}]
+    )
+    assert output == {"updated": 1}
+    mock_connection.send_command.assert_called_once_with(
+        "update_feature_geometry",
+        {"layer_id": "lyr", "updates": [{"fid": 1, "geometry_wkt": "POINT(1 2)"}]},
+        timeout=30,
+    )
+
+
+@pytest.mark.asyncio
+async def test_set_raster_style_defaults(mock_connection):
+    from qgis_mcp.server import set_raster_style
+
+    mock_connection.send_command.return_value = {"status": "success", "result": {"ok": True}}
+    await set_raster_style(_make_ctx(), layer_id="dem", style_type="singleband_pseudocolor")
+    params = mock_connection.send_command.call_args[0][1]
+    assert params["style_type"] == "singleband_pseudocolor"
+    assert params["band"] == 1
+    assert params["color_ramp"] == "Viridis"
+    # Unset bounds must stay None so the plugin falls back to band statistics.
+    assert params["min_value"] is None and params["max_value"] is None
+
+
+@pytest.mark.asyncio
+async def test_list_connections_filters_by_provider(mock_connection):
+    from qgis_mcp.server import list_connections
+
+    mock_connection.send_command.return_value = {
+        "status": "success",
+        "result": {"connections": [{"provider": "postgres", "name": "gis"}], "count": 1},
+    }
+    output = await list_connections(_make_ctx(), provider="postgres")
+    assert output["count"] == 1
+    mock_connection.send_command.assert_called_once_with(
+        "list_connections", {"provider": "postgres"}, timeout=30
+    )
+
+
+@pytest.mark.asyncio
+async def test_add_layer_from_connection_returns_resource_link(mock_connection):
+    from qgis_mcp.server import add_layer_from_connection
+
+    mock_connection.send_command.return_value = {
+        "status": "success",
+        "result": {"id": "abc", "name": "roads", "type": "vector"},
+    }
+    output = await add_layer_from_connection(
+        _make_ctx(), provider="postgres", connection="gis", table="roads", schema="public"
+    )
+    assert json.loads(output[0].text)["id"] == "abc"
+    assert str(output[1].uri) == "qgis://layers/abc/info"
+
+
+@pytest.mark.asyncio
+async def test_execute_connection_sql_requires_confirmation(mock_connection):
+    """Server-side SQL can drop tables — a declined prompt must not send it."""
+    from qgis_mcp.server import execute_connection_sql
+
+    output = await execute_connection_sql(
+        _make_ctx(elicitation="decline"),
+        provider="postgres",
+        connection="gis",
+        sql="DELETE FROM roads",
+    )
+    assert output == {"ok": False, "message": "Cancelled by user"}
+    mock_connection.send_command.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_import_layer_to_connection_confirms_only_on_overwrite(mock_connection):
+    from qgis_mcp.server import import_layer_to_connection
+
+    mock_connection.send_command.return_value = {"status": "success", "result": {"ok": True}}
+    # No overwrite: nothing is destroyed, so no prompt is raised.
+    ctx = _make_ctx(elicitation="decline")
+    assert await import_layer_to_connection(
+        ctx, layer_id="lyr", provider="ogr", connection="db", table="t"
+    ) == {"ok": True}
+    ctx.elicit.assert_not_called()
+    # Overwrite replaces an existing table, so a decline must block the call.
+    mock_connection.send_command.reset_mock()
+    assert await import_layer_to_connection(
+        ctx, layer_id="lyr", provider="ogr", connection="db", table="t", overwrite=True
+    ) == {"ok": False, "message": "Cancelled by user"}
+    mock_connection.send_command.assert_not_called()
+
+
+def test_confirmation_gated_commands_blocked_in_batch():
+    """Batch must not be a way to skip the elicitation on the new destructive commands."""
+    from qgis_mcp.helpers import BATCH_BLOCKED_COMMANDS
+
+    assert {
+        "rollback_edits",
+        "execute_connection_sql",
+        "import_layer_to_connection",
+    } <= BATCH_BLOCKED_COMMANDS

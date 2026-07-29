@@ -240,14 +240,16 @@ To auto-update instead, add `--refresh-package qgis-mcp` before `--from` in the 
 
 After updating the plugin, click **Stop / Start** in the QGIS MCP dock widget (or reload via `Plugins` > `QGIS MCP` > `Reload Plugin`) to load the new code without restarting QGIS.
 
-## Tools (103)
+## Tools (117)
 
 | Category | Tools |
 |----------|-------|
 | **Project** | `load_project`, `create_new_project`, `save_project`, `get_project_info` |
 | **Layers** | `get_layers`, `add_vector_layer`, `add_raster_layer`, `remove_layer`, `find_layer`, `create_memory_layer`, `set_layer_visibility`, `zoom_to_layer`, `get_layer_extent`, `set_layer_property` |
-| **Features** | `get_layer_features`, `add_features`, `update_features`, `delete_features`, `select_features`, `get_selection`, `clear_selection`, `get_field_statistics` |
-| **Styling** | `set_layer_style` (single, categorized, graduated) |
+| **Features** | `get_layer_features`, `add_features`, `update_features`, `update_feature_geometry`, `delete_features`, `select_features`, `get_selection`, `clear_selection`, `get_field_statistics` |
+| **Editing** | `start_editing`, `commit_edits`, `rollback_edits`, `get_edit_status`, `undo_edits`, `redo_edits` |
+| **Styling** | `set_layer_style` (single, categorized, graduated), `set_raster_style` (pseudocolor, gray, RGB, hillshade) |
+| **Connections** | `list_connections`, `list_connection_tables`, `add_layer_from_connection`, `import_layer_to_connection`, `execute_connection_sql` |
 | **Rendering** | `render_map`, `get_canvas_screenshot`, `get_canvas_extent`, `set_canvas_extent` |
 | **Processing** | `execute_processing`, `list_processing_algorithms`, `get_algorithm_help`, `create_processing_model` |
 | **Layouts** | `list_layouts`, `export_layout`, `create_layout`, `add_layout_map`, `add_layout_label`, `add_layout_legend`, `add_layout_scalebar`, `add_layout_picture`, `add_layout_table`, `get_layout_info`, `remove_layout` |
@@ -261,7 +263,7 @@ All tools are async with human-readable titles and annotations (`readOnly`, `des
 
 ### Compound tool mode
 
-Set `QGIS_MCP_TOOL_MODE=compound` to reduce the granular tools to 25 grouped tools (every granular command stays reachable), cutting schema overhead per LLM turn. Each compound tool takes an `action` parameter plus a `params` object holding that action's parameters:
+Set `QGIS_MCP_TOOL_MODE=compound` to reduce the granular tools to 27 grouped tools (every granular command stays reachable), cutting schema overhead per LLM turn. Each compound tool takes an `action` parameter plus a `params` object holding that action's parameters:
 
 ```bash
 QGIS_MCP_TOOL_MODE=compound uv run --no-sync src/qgis_mcp/server.py
@@ -286,7 +288,7 @@ Groups: `system`, `project`, `layer`, `features`, `selection`, `style`, `canvas`
 | `QGIS_MCP_TRANSPORT` | `stdio` | MCP transport: `stdio` or `streamable-http` |
 | `QGIS_MCP_LOG_FILE` | `~/.local/share/qgis-mcp/server.log` | Log file path (empty to disable) |
 | `QGIS_MCP_LOG_LEVEL` | `INFO` | File log level |
-| `QGIS_MCP_TOOL_MODE` | `granular` | `granular` (104 tools) or `compound` (25 grouped) |
+| `QGIS_MCP_TOOL_MODE` | `granular` | `granular` (117 tools) or `compound` (27 grouped) |
 
 ### Authentication
 

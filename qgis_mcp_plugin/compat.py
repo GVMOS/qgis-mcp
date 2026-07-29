@@ -16,13 +16,18 @@ wins.
 
 from qgis.core import (
     Qgis,
+    QgsAbstractDatabaseProviderConnection,
     QgsAggregateCalculator,
+    QgsColorRampShader,
+    QgsContrastEnhancement,
     QgsLayoutExporter,
     QgsMapLayer,
     QgsProcessingParameterDefinition,
     QgsProcessingParameterFile,
     QgsProcessingParameterNumber,
     QgsRasterBandStats,
+    QgsSingleBandGrayRenderer,
+    QgsVectorLayerExporter,
     QgsVectorSimplifyMethod,
     QgsWkbTypes,
 )
@@ -141,4 +146,94 @@ PROC_FILE_FOLDER = _enum(
     (Qgis, "ProcessingFileParameterBehavior.Folder"),
     (QgsProcessingParameterFile, "Behavior.Folder"),
     (QgsProcessingParameterFile, "Folder"),
+)
+
+# ── Raster shader interpolation / classification ─────────────────────
+# Qgis.ShaderInterpolationMethod / ShaderClassificationMethod arrived in 3.38;
+# the QgsColorRampShader nested forms cover 3.28-3.36.
+SHADER_INTERPOLATED = _enum(
+    (Qgis, "ShaderInterpolationMethod.Linear"),
+    (QgsColorRampShader, "Type.Interpolated"),
+)
+SHADER_DISCRETE = _enum(
+    (Qgis, "ShaderInterpolationMethod.Discrete"),
+    (QgsColorRampShader, "Type.Discrete"),
+)
+SHADER_EXACT = _enum(
+    (Qgis, "ShaderInterpolationMethod.Exact"),
+    (QgsColorRampShader, "Type.Exact"),
+)
+SHADER_CLASS_CONTINUOUS = _enum(
+    (Qgis, "ShaderClassificationMethod.Continuous"),
+    (QgsColorRampShader, "ClassificationMode.Continuous"),
+)
+SHADER_CLASS_EQUAL_INTERVAL = _enum(
+    (Qgis, "ShaderClassificationMethod.EqualInterval"),
+    (QgsColorRampShader, "ClassificationMode.EqualInterval"),
+)
+SHADER_CLASS_QUANTILE = _enum(
+    (Qgis, "ShaderClassificationMethod.Quantile"),
+    (QgsColorRampShader, "ClassificationMode.Quantile"),
+)
+
+# ── Raster contrast enhancement / gray gradient ──────────────────────
+CONTRAST_NONE = _enum(
+    (QgsContrastEnhancement, "ContrastEnhancementAlgorithm.NoEnhancement"),
+    (QgsContrastEnhancement, "NoEnhancement"),
+)
+CONTRAST_STRETCH_MINMAX = _enum(
+    (QgsContrastEnhancement, "ContrastEnhancementAlgorithm.StretchToMinimumMaximum"),
+    (QgsContrastEnhancement, "StretchToMinimumMaximum"),
+)
+CONTRAST_CLIP_MINMAX = _enum(
+    (QgsContrastEnhancement, "ContrastEnhancementAlgorithm.ClipToMinimumMaximum"),
+    (QgsContrastEnhancement, "ClipToMinimumMaximum"),
+)
+CONTRAST_STRETCH_CLIP_MINMAX = _enum(
+    (QgsContrastEnhancement, "ContrastEnhancementAlgorithm.StretchAndClipToMinimumMaximum"),
+    (QgsContrastEnhancement, "StretchAndClipToMinimumMaximum"),
+)
+GRAY_BLACK_TO_WHITE = _enum(
+    (QgsSingleBandGrayRenderer, "Gradient.BlackToWhite"),
+    (QgsSingleBandGrayRenderer, "BlackToWhite"),
+)
+GRAY_WHITE_TO_BLACK = _enum(
+    (QgsSingleBandGrayRenderer, "Gradient.WhiteToBlack"),
+    (QgsSingleBandGrayRenderer, "WhiteToBlack"),
+)
+
+# ── Database provider connections ────────────────────────────────────
+CONN_TABLE_VECTOR = _enum(
+    (QgsAbstractDatabaseProviderConnection, "TableFlag.Vector"),
+    (QgsAbstractDatabaseProviderConnection, "Vector"),
+)
+CONN_TABLE_RASTER = _enum(
+    (QgsAbstractDatabaseProviderConnection, "TableFlag.Raster"),
+    (QgsAbstractDatabaseProviderConnection, "Raster"),
+)
+CONN_TABLE_VIEW = _enum(
+    (QgsAbstractDatabaseProviderConnection, "TableFlag.View"),
+    (QgsAbstractDatabaseProviderConnection, "View"),
+)
+CONN_TABLE_ASPATIAL = _enum(
+    (QgsAbstractDatabaseProviderConnection, "TableFlag.Aspatial"),
+    (QgsAbstractDatabaseProviderConnection, "Aspatial"),
+)
+CONN_CAP_SCHEMAS = _enum(
+    (QgsAbstractDatabaseProviderConnection, "Capability.Schemas"),
+    (QgsAbstractDatabaseProviderConnection, "Schemas"),
+)
+CONN_CAP_SQL_LAYERS = _enum(
+    (QgsAbstractDatabaseProviderConnection, "Capability.SqlLayers"),
+    (QgsAbstractDatabaseProviderConnection, "SqlLayers"),
+)
+CONN_CAP_EXECUTE_SQL = _enum(
+    (QgsAbstractDatabaseProviderConnection, "Capability.ExecuteSql"),
+    (QgsAbstractDatabaseProviderConnection, "ExecuteSql"),
+)
+
+# ── Vector layer export result ───────────────────────────────────────
+EXPORT_SUCCESS = _enum(
+    (Qgis, "VectorExportResult.Success"),
+    (QgsVectorLayerExporter, "NoError"),
 )

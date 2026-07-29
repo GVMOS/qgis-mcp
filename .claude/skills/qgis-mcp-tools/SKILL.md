@@ -3,7 +3,7 @@ name: qgis-mcp-tools
 description: Reference for all qgis-mcp MCP tools, resources, and prompts (names, titles, annotations, descriptions). Use when adding/modifying an MCP tool, explaining what a tool does, or checking tool annotations (readOnly/destructive/idempotent).
 ---
 
-# MCP Tools (103 total)
+# MCP Tools (117 total)
 
 | Tool | Title | Annotations | Description |
 |---|---|---|---|
@@ -85,6 +85,19 @@ description: Reference for all qgis-mcp MCP tools, resources, and prompts (names
 | `identify_features` | Identify Features | readOnly | Features at a point [x,y] across layers (map-click analogue) |
 | `duplicate_layer` | Duplicate Layer | — | Duplicate a layer (with style) under a new name |
 | `set_layer_order` | Set Layer Order | idempotent | Set explicit layer draw order (top to bottom) |
+| `set_raster_style` | Set Raster Style | — | Raster symbology: `singleband_pseudocolor` (ramp + classification/interpolation), `singleband_gray`, `multiband_color` (RGB), `hillshade`. min/max default to band statistics |
+| `update_feature_geometry` | Update Feature Geometry | destructive | Replace geometries by fid from WKT (layer CRS); undoable inside an edit session |
+| `start_editing` | Start Editing | — | Open an edit session; feature writes then go to the undoable buffer |
+| `commit_edits` | Commit Edits | — | Write the edit buffer to the data source and close the session |
+| `rollback_edits` | Rollback Edits | destructive | Discard every uncommitted change (elicitation) |
+| `get_edit_status` | Get Edit Status | readOnly | Editable/modified flags, undo-redo availability, pending add/delete/change counts |
+| `undo_edits` | Undo Edits | — | Undo N steps on the layer's own undo stack |
+| `redo_edits` | Redo Edits | — | Redo N previously undone steps |
+| `list_connections` | List Connections | readOnly | Saved Browser-panel connections (PostGIS, GeoPackage, SpatiaLite, ...); passwords redacted |
+| `list_connection_tables` | List Connection Tables | readOnly | Schemas, then tables with geometry column, CRS, primary key and kind |
+| `add_layer_from_connection` | Add Layer from Connection | — | Load a connection table, or a database-side SQL query, as a layer (60s) |
+| `import_layer_to_connection` | Import Layer to Connection | destructive | Write a vector layer into a connection as a new table; `overwrite` elicits (60s) |
+| `execute_connection_sql` | Execute Connection SQL | destructive | Server-side SQL on the connection's database (elicitation, 60s) — not the virtual-layer `execute_sql` |
 
 > Note: the "Phase 5/6/7" tools (active layer, canvas scale, labeling, layer CRS, bookmarks, map themes, project CRS, web layers, table joins, field add/delete/rename, QML styles, layout create/add-map, and the processing/analysis tools above) extend the original 52. Some are not yet listed individually in this table — see `execute_command` handlers in `qgis_mcp_plugin/plugin.py` for the authoritative set.
 
@@ -112,10 +125,10 @@ description: Reference for all qgis-mcp MCP tools, resources, and prompts (names
 ## MCP Protocol Features
 
 - **MCP Logging**: Long-running tools (`execute_processing`, `render_map`, `execute_code`) and notable operations (`load_project`, `reload_plugin`) send `ctx.info()` status messages to the client.
-- **Elicitation**: Destructive tools (`remove_layer`, `delete_features`, `set_setting`, `execute_code`) ask for user confirmation via `ctx.elicit()`. Fail-open: proceeds if the client doesn't support elicitation (tools are already gated by `ToolAnnotations(destructiveHint=True)`).
+- **Elicitation**: Destructive tools (`remove_layer`, `delete_features`, `set_setting`, `execute_code`, `rollback_edits`, `execute_connection_sql`, `import_layer_to_connection` when `overwrite`) ask for user confirmation via `ctx.elicit()`. Commands whose tool always elicits are in `BATCH_BLOCKED_COMMANDS` so `batch` cannot bypass the prompt. Fail-open: proceeds if the client doesn't support elicitation (tools are already gated by `ToolAnnotations(destructiveHint=True)`).
 - **Completions**: `layer_id` arguments support auto-completion from available layers.
-- **Tool Titles**: All 51 tools have human-readable `title=` for better display in Claude Desktop / Cursor.
+- **Tool Titles**: All 117 tools have human-readable `title=` for better display in Claude Desktop / Cursor.
 - **Tool Annotations**: `readOnly`, `destructive`, `idempotent` hints via `ToolAnnotations`.
 - **Streamable HTTP**: Set `QGIS_MCP_TRANSPORT=streamable-http` for remote/multi-client support.
-- **Compound Tool Mode**: Set `QGIS_MCP_TOOL_MODE=compound` to replace the granular tools with 25 grouped tools (full parity: every granular command is reachable via an action), reducing schema overhead per LLM turn. Each compound tool takes `action` (str, required) plus `params` (object, optional) holding that action's parameters — e.g. `{"action": "load", "params": {"path": "/data/x.qgz"}}`. Handlers must never use `**kwargs`: FastMCP/pydantic cannot express variadic kwargs in JSON Schema and degrades them to a single required string (issue #24).
+- **Compound Tool Mode**: Set `QGIS_MCP_TOOL_MODE=compound` to replace the granular tools with 27 grouped tools (full parity: every granular command is reachable via an action), reducing schema overhead per LLM turn. Each compound tool takes `action` (str, required) plus `params` (object, optional) holding that action's parameters — e.g. `{"action": "load", "params": {"path": "/data/x.qgz"}}`. Handlers must never use `**kwargs`: FastMCP/pydantic cannot express variadic kwargs in JSON Schema and degrades them to a single required string (issue #24).
 - **Structured File Logging**: Rotating file log (5MB x 3 backups) at `~/.local/share/qgis-mcp/server.log`. Console (stderr) only shows WARNING+. Configure via `QGIS_MCP_LOG_FILE` and `QGIS_MCP_LOG_LEVEL`.

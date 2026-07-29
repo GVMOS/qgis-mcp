@@ -949,6 +949,92 @@ async def delete_features(
     return await _send("delete_features", params, instance=instance)
 
 
+@mcp.tool(
+    title="Update Feature Geometry",
+    annotations=ToolAnnotations(destructiveHint=True),
+    description="Replace feature geometries. updates: [{fid: 1, geometry_wkt: 'POINT(1 2)'}]. "
+    "WKT must be in the layer's CRS. Inside an edit session the change is undoable; "
+    "otherwise it is written straight to the data source.",
+)
+async def update_feature_geometry(
+    ctx: Context,
+    layer_id: str,
+    updates: list[dict],
+    instance: str | None = None,
+) -> dict:
+    return await _send(
+        "update_feature_geometry", {"layer_id": layer_id, "updates": updates}, instance=instance
+    )
+
+
+# --- Edit Sessions ---
+
+
+@mcp.tool(
+    title="Start Editing",
+    description="Open an edit session on a vector layer. Subsequent add/update/delete calls go to "
+    "the undoable edit buffer instead of the data source, until commit_edits or rollback_edits.",
+)
+async def start_editing(ctx: Context, layer_id: str, instance: str | None = None) -> dict:
+    return await _send("start_editing", {"layer_id": layer_id}, instance=instance)
+
+
+@mcp.tool(
+    title="Commit Edits",
+    description="Commit the layer's edit buffer to the data source and close the edit session.",
+)
+async def commit_edits(ctx: Context, layer_id: str, instance: str | None = None) -> dict:
+    await ctx.info(f"Committing edits on layer {layer_id}")
+    return await _send("commit_edits", {"layer_id": layer_id}, instance=instance)
+
+
+@mcp.tool(
+    title="Rollback Edits",
+    annotations=ToolAnnotations(destructiveHint=True),
+    description="Discard every uncommitted change on a layer and close the edit session.",
+)
+async def rollback_edits(ctx: Context, layer_id: str, instance: str | None = None) -> dict:
+    if not await _confirm_destructive(
+        ctx, f"Discard all uncommitted edits on layer {layer_id}? This cannot be undone."
+    ):
+        return {"ok": False, "message": "Cancelled by user"}
+    return await _send("rollback_edits", {"layer_id": layer_id}, instance=instance)
+
+
+@mcp.tool(
+    title="Get Edit Status",
+    annotations=ToolAnnotations(readOnlyHint=True),
+    description="Edit state of a layer: editable, modified, undo/redo availability, and the "
+    "counts of pending added/deleted/changed features.",
+    structured_output=True,
+)
+async def get_edit_status(
+    ctx: Context, layer_id: str, instance: str | None = None
+) -> dict[str, Any]:
+    return await _send("get_edit_status", {"layer_id": layer_id}, instance=instance)
+
+
+@mcp.tool(
+    title="Undo Edits",
+    description="Undo the last edit operations on a layer (its own undo stack). "
+    "Returns how many steps were actually undone.",
+)
+async def undo_edits(
+    ctx: Context, layer_id: str, steps: int = 1, instance: str | None = None
+) -> dict:
+    return await _send("undo_edits", {"layer_id": layer_id, "steps": steps}, instance=instance)
+
+
+@mcp.tool(
+    title="Redo Edits",
+    description="Redo previously undone edit operations on a layer.",
+)
+async def redo_edits(
+    ctx: Context, layer_id: str, steps: int = 1, instance: str | None = None
+) -> dict:
+    return await _send("redo_edits", {"layer_id": layer_id, "steps": steps}, instance=instance)
+
+
 # --- Selection ---
 
 
@@ -1019,6 +1105,64 @@ async def set_layer_style(
     if field:
         params["field"] = field
     return await _send("set_layer_style", params, instance=instance)
+
+
+@mcp.tool(
+    title="Set Raster Style",
+    description="Set raster symbology. style_type: 'singleband_pseudocolor' (color ramp over one "
+    "band), 'singleband_gray', 'multiband_color' (RGB), 'hillshade'. "
+    "min_value/max_value default to the band statistics. "
+    "color_ramp: QGIS ramp name (e.g. 'Viridis', 'Spectral', 'RdYlGn'). "
+    "classification: continuous|equal_interval|quantile. "
+    "interpolation: interpolated|discrete|exact. "
+    "gradient (gray): black_to_white|white_to_black. "
+    "contrast: none|stretch|clip|stretch_clip. "
+    "hillshade uses band, azimuth, altitude, z_factor.",
+)
+async def set_raster_style(
+    ctx: Context,
+    layer_id: str,
+    style_type: str,
+    band: int = 1,
+    color_ramp: str = "Viridis",
+    classes: int = 5,
+    min_value: float | None = None,
+    max_value: float | None = None,
+    classification: str = "continuous",
+    interpolation: str = "interpolated",
+    gradient: str = "black_to_white",
+    contrast: str = "stretch",
+    red_band: int = 1,
+    green_band: int = 2,
+    blue_band: int = 3,
+    azimuth: float = 315.0,
+    altitude: float = 45.0,
+    z_factor: float = 1.0,
+    instance: str | None = None,
+) -> dict:
+    return await _send(
+        "set_raster_style",
+        {
+            "layer_id": layer_id,
+            "style_type": style_type,
+            "band": band,
+            "color_ramp": color_ramp,
+            "classes": classes,
+            "min_value": min_value,
+            "max_value": max_value,
+            "classification": classification,
+            "interpolation": interpolation,
+            "gradient": gradient,
+            "contrast": contrast,
+            "red_band": red_band,
+            "green_band": green_band,
+            "blue_band": blue_band,
+            "azimuth": azimuth,
+            "altitude": altitude,
+            "z_factor": z_factor,
+        },
+        instance=instance,
+    )
 
 
 # --- Canvas ---
@@ -2080,6 +2224,142 @@ async def transform_coordinates(
     return await _send("transform_coordinates", params, instance=instance)
 
 
+# --- Data Source Connections ---
+
+
+@mcp.tool(
+    title="List Connections",
+    annotations=ToolAnnotations(readOnlyHint=True),
+    description="List the data source connections saved in QGIS (PostGIS, GeoPackage, SpatiaLite, "
+    "MS SQL, Oracle, ...) — the Browser panel entries. Optionally filter by provider "
+    "(e.g. 'postgres', 'ogr', 'spatialite'). Passwords are redacted from the URIs.",
+    structured_output=True,
+)
+async def list_connections(
+    ctx: Context, provider: str | None = None, instance: str | None = None
+) -> dict[str, Any]:
+    return await _send("list_connections", {"provider": provider}, instance=instance)
+
+
+@mcp.tool(
+    title="List Connection Tables",
+    annotations=ToolAnnotations(readOnlyHint=True),
+    description="List tables reachable through a saved connection. On providers with schemas "
+    "(PostGIS), omit schema to get the schema list first, then pass one. Returns each table's "
+    "geometry column, CRS, primary key and kind.",
+    structured_output=True,
+)
+async def list_connection_tables(
+    ctx: Context,
+    provider: str,
+    connection: str,
+    schema: str | None = None,
+    instance: str | None = None,
+) -> dict[str, Any]:
+    return await _send(
+        "list_connection_tables",
+        {"provider": provider, "connection": connection, "schema": schema},
+        instance=instance,
+    )
+
+
+@mcp.tool(
+    title="Add Layer from Connection",
+    description="Load a table from a saved connection as a project layer. Pass table (+ schema), "
+    "or sql to build a query layer executed by the database. For a SQL layer, geometry_column "
+    "and primary_key may be needed for QGIS to map/identify the result.",
+)
+async def add_layer_from_connection(
+    ctx: Context,
+    provider: str,
+    connection: str,
+    table: str | None = None,
+    schema: str | None = None,
+    sql: str | None = None,
+    geometry_column: str | None = None,
+    primary_key: str | None = None,
+    name: str | None = None,
+    instance: str | None = None,
+) -> list:
+    result = await _send(
+        "add_layer_from_connection",
+        {
+            "provider": provider,
+            "connection": connection,
+            "table": table,
+            "schema": schema,
+            "sql": sql,
+            "geometry_column": geometry_column,
+            "primary_key": primary_key,
+            "name": name,
+        },
+        timeout=TIMEOUT_LONG,
+        instance=instance,
+    )
+    return make_layer_response(result)
+
+
+@mcp.tool(
+    title="Import Layer to Connection",
+    annotations=ToolAnnotations(destructiveHint=True),
+    description="Write a loaded vector layer into a saved connection as a new table "
+    "(PostGIS, GeoPackage, ...). Fails if the table exists unless overwrite=true.",
+)
+async def import_layer_to_connection(
+    ctx: Context,
+    layer_id: str,
+    provider: str,
+    connection: str,
+    table: str,
+    schema: str | None = None,
+    overwrite: bool = False,
+    instance: str | None = None,
+) -> dict:
+    if overwrite and not await _confirm_destructive(
+        ctx, f"Overwrite table '{table}' in connection '{connection}'? This cannot be undone."
+    ):
+        return {"ok": False, "message": "Cancelled by user"}
+    await ctx.info(f"Importing layer {layer_id} into {connection}.{table}")
+    return await _send(
+        "import_layer_to_connection",
+        {
+            "layer_id": layer_id,
+            "provider": provider,
+            "connection": connection,
+            "table": table,
+            "schema": schema,
+            "overwrite": overwrite,
+        },
+        timeout=TIMEOUT_LONG,
+        instance=instance,
+    )
+
+
+@mcp.tool(
+    title="Execute Connection SQL",
+    annotations=ToolAnnotations(destructiveHint=True),
+    description="Run SQL directly on the database behind a saved connection (server-side, not a "
+    "virtual layer — use execute_sql for that). Can modify the database: DDL/DML run as issued. "
+    "limit caps returned rows (-1 for all).",
+)
+async def execute_connection_sql(
+    ctx: Context,
+    provider: str,
+    connection: str,
+    sql: str,
+    limit: int = 100,
+    instance: str | None = None,
+) -> dict[str, Any]:
+    if not await _confirm_destructive(ctx, f"Run SQL on connection '{connection}'?\n\n{sql}"):
+        return {"ok": False, "message": "Cancelled by user"}
+    return await _send(
+        "execute_connection_sql",
+        {"provider": provider, "connection": connection, "sql": sql, "limit": limit},
+        timeout=TIMEOUT_LONG,
+        instance=instance,
+    )
+
+
 @mcp.tool(
     title="Add Web Layer",
     description="Add a web layer (XYZ, WMS, WFS) to the project. service: 'xyz', 'wms', 'wfs'.",
@@ -2779,7 +3059,7 @@ def llms_context_resource() -> str:
 
 ## Overview
 QGIS MCP connects QGIS Desktop to LLMs via the Model Context Protocol.
-67 tools for project management, layer operations, feature editing, styling, processing, and more.
+117 tools for project management, layer operations, feature editing, styling, processing, and more.
 
 ## Quick Start
 1. `ping` — verify connectivity
@@ -2797,9 +3077,10 @@ QGIS MCP connects QGIS Desktop to LLMs via the Model Context Protocol.
 - **Visibility**: set_layer_visibility, zoom_to_layer
 - **Features**: get_layer_features (max 50, filter with expressions), get_field_statistics, add_table_join
 - **Fields**: add_field, delete_field, rename_field
-- **Editing**: add_features, update_features, delete_features
+- **Editing**: add_features, update_features, update_feature_geometry, delete_features
+- **Edit sessions**: start_editing, commit_edits, rollback_edits, get_edit_status, undo_edits, redo_edits (feature writes are buffered and undoable while a session is open)
 - **Selection**: select_features, get_selection, clear_selection
-- **Styling**: set_layer_style (single/categorized/graduated), apply_style_qml, save_style_qml
+- **Styling**: set_layer_style (single/categorized/graduated, vector only), set_raster_style (singleband_pseudocolor/singleband_gray/multiband_color/hillshade), apply_style_qml, save_style_qml
 - **Labeling**: get_layer_labeling, set_layer_labeling (field, font_size, color)
 - **Canvas**: get_canvas_extent, set_canvas_extent, get_canvas_screenshot, get_canvas_scale, set_canvas_scale
 - **Raster**: get_raster_info
@@ -2821,6 +3102,7 @@ QGIS MCP connects QGIS Desktop to LLMs via the Model Context Protocol.
 - **Settings**: get_setting, set_setting
 - **Bookmarks**: get_bookmarks, add_bookmark, remove_bookmark
 - **Map Themes**: get_map_themes, add_map_theme, remove_map_theme, apply_map_theme
+- **Connections**: list_connections, list_connection_tables, add_layer_from_connection, import_layer_to_connection, execute_connection_sql (saved PostGIS/GeoPackage/... connections from the Browser panel)
 
 ## Tips
 - **World basemap**: QGIS ships with a built-in world map. In the QGIS UI, \
@@ -2862,7 +3144,7 @@ currently reachable — a name that is not configured is rejected with the valid
 instances (default: unset = a single instance named "default" from QGIS_MCP_HOST/PORT)
 - QGIS_MCP_TOKEN — optional shared secret; when set, must match the plugin's value (default: unset = no auth)
 - QGIS_MCP_TRANSPORT — "stdio" (default) or "streamable-http"
-- QGIS_MCP_TOOL_MODE — "granular" (default, 51 tools) or "compound" (~19 grouped tools)
+- QGIS_MCP_TOOL_MODE — "granular" (default, 117 tools) or "compound" (27 grouped tools)
 - QGIS_MCP_LOG_FILE — log file path (default: ~/.local/share/qgis-mcp/server.log)
 - QGIS_MCP_LOG_LEVEL — file log level (default: INFO)
 """

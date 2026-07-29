@@ -27,6 +27,9 @@ BATCH_BLOCKED_COMMANDS = frozenset(
         "delete_features",
         "set_setting",
         "reload_plugin",
+        "rollback_edits",
+        "execute_connection_sql",
+        "import_layer_to_connection",
     }
 )
 
