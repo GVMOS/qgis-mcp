@@ -2548,7 +2548,10 @@ async def test_every_tool_forwards_instance():
 
     seen: list = []
 
-    def fake_send_sync(command_type, params=None, timeout=30, instance=None):
+    def fake_send_sync(command_type, params=None, timeout=30, instance=None, retries=None):
+        # Mirror _send_sync's real signature: _send passes every argument
+        # positionally, so a stub that is one parameter short raises TypeError and
+        # the suppress() below would hide it as "never reached _send_sync".
         seen.append((command_type, instance))
         return {}
 
@@ -2595,6 +2598,9 @@ async def test_list_qgis_instances_reports_configuration_and_reachability():
     with (
         patch.dict(os.environ, {"QGIS_MCP_INSTANCES": "a=9876,b=lab:9877"}, clear=True),
         patch("qgis_mcp.server._probe_instance", side_effect=[True, False]),
+        # Reachable instances are also asked who they are; stub it so this stays a
+        # test of the configuration report and does no socket I/O.
+        patch("qgis_mcp.server._instance_identity", AsyncMock(return_value={})),
     ):
         result = await list_qgis_instances(_make_ctx())
 
@@ -2619,6 +2625,7 @@ async def test_list_instances_reports_default_when_one_is_named_default():
     with (
         patch.dict(os.environ, {"QGIS_MCP_INSTANCES": "a=9876,default=9877"}, clear=True),
         patch("qgis_mcp.server._probe_instance", side_effect=[True, True]),
+        patch("qgis_mcp.server._instance_identity", AsyncMock(return_value={})),
     ):
         result = await list_qgis_instances(_make_ctx())
 

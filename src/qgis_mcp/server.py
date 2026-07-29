@@ -328,6 +328,7 @@ def _send_sync(
     params: dict | None = None,
     timeout: int = TIMEOUT_DEFAULT,
     instance: str | None = None,
+    retries: int | None = None,
 ) -> dict:
     """Send a command synchronously to *instance* and return the unwrapped result.
 
@@ -345,11 +346,18 @@ def _send_sync(
     short schedule applies. Keying this off the first connection to *any*
     instance rather than to this one keeps a routine call to a closed instance
     from costing ~21s every single time.
+
+    ``retries`` overrides that schedule. Pass 1 for calls that must stay quick and
+    have nothing to gain from waiting — listing instances, for one, where the
+    whole point is a fast answer about each one's current state.
     """
     name = resolve_instance(instance)
     last_exc: Exception | None = None
 
-    if _first_connected:
+    if retries is not None:
+        max_retries = max(1, retries)
+        delays = _RETRY_DELAYS
+    elif _first_connected:
         max_retries = _MAX_RETRIES
         delays = _RETRY_DELAYS
     else:
@@ -423,10 +431,13 @@ async def _send(
     params: dict | None = None,
     timeout: int = 30,
     instance: str | None = None,
+    retries: int | None = None,
 ) -> dict:
     """Send a command via asyncio.to_thread to avoid blocking the event loop."""
     try:
-        return await asyncio.to_thread(_send_sync, command_type, params, timeout, instance)
+        return await asyncio.to_thread(
+            _send_sync, command_type, params, timeout, instance, retries
+        )
     except Exception as exc:
         message = str(exc)
         hint = _get_error_hint(message)
@@ -556,13 +567,55 @@ async def diagnose(ctx: Context, instance: str | None = None) -> dict[str, Any]:
     return enrich_diagnose(result)
 
 
+_IDENTITY_TIMEOUT = 5  # seconds; listing must stay quick even if one QGIS is busy
+
+
+async def _no_identity() -> dict[str, Any]:
+    """Identity placeholder for an instance that is not reachable."""
+    return {}
+
+
+async def _instance_identity(instance: str) -> dict[str, Any]:
+    """Which QGIS actually answers on *instance*, so a name can be verified.
+
+    Ports are not identity: two windows of the same version on the same profile
+    look alike from the outside. get_qgis_info reports the pid and window title,
+    which do distinguish them. One round-trip and no retries — the same reasoning
+    as _probe_instance, whose comment warns that the retry schedule would make
+    listing cost ~11s. A failure here must not fail the listing either: an
+    instance that answered the probe but not this is still usefully reachable.
+    """
+    try:
+        info = await _send(
+            "get_qgis_info", timeout=_IDENTITY_TIMEOUT, instance=instance, retries=1
+        )
+    except Exception as exc:
+        logger.warning("Could not identify instance %r: %s", instance, exc)
+        return {}
+
+    profile_folder = info.get("profile_folder") or ""
+    identity = {
+        "qgis_version": info.get("qgis_version"),
+        # Basename is what a human reads; the full path disambiguates two profiles
+        # with the same name under different roots.
+        "profile": os.path.basename(profile_folder.replace("\\", "/").rstrip("/")) or None,
+        "profile_folder": profile_folder or None,
+    }
+    for key in ("pid", "window_title"):  # absent on plugins older than 0.9.0
+        if info.get(key) is not None:
+            identity[key] = info[key]
+    return {key: value for key, value in identity.items() if value is not None}
+
+
 @mcp.tool(
     title="List QGIS Instances",
     annotations=ToolAnnotations(readOnlyHint=True),
-    description="List the configured QGIS instances with their name, host, port, and whether "
-    "each is currently reachable. Pass a name as the 'instance' argument of any other tool to "
-    "target that QGIS window; omitting it targets the instance named 'default', or the first "
-    "one listed when no instance is called 'default'.",
+    description="List the configured QGIS instances: name, host, port, reachability, and — for "
+    "each reachable one — which QGIS actually answered (version, process id, window title, "
+    "profile). Use it to confirm a name maps to the window you mean before writing to it. Pass a "
+    "name as the 'instance' argument of any other tool to target that QGIS window; omitting it "
+    "targets the instance named 'default', or the first one listed when no instance is called "
+    "'default'.",
     structured_output=True,
 )
 async def list_qgis_instances(ctx: Context) -> dict[str, Any]:
@@ -573,10 +626,18 @@ async def list_qgis_instances(ctx: Context) -> dict[str, Any]:
             for name, (host, port) in instances.items()
         )
     )
+    identities = await asyncio.gather(
+        *(
+            _instance_identity(name) if ok else _no_identity()
+            for name, ok in zip(instances, reachable, strict=True)
+        )
+    )
     return {
         "instances": [
-            {"name": name, "host": host, "port": port, "reachable": ok}
-            for (name, (host, port)), ok in zip(instances.items(), reachable, strict=True)
+            {"name": name, "host": host, "port": port, "reachable": ok, **identity}
+            for (name, (host, port)), ok, identity in zip(
+                instances.items(), reachable, identities, strict=True
+            )
         ],
         # The name a call with no `instance` argument actually resolves to — not
         # the constant "default", which would be a lie whenever no entry carries

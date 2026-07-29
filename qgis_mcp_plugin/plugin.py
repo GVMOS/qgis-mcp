@@ -614,11 +614,20 @@ class QgisMCPServer(QObject):
         return {"status": overall, "checks": checks}
 
     def get_qgis_info(self, **kwargs):
-        return {
+        info = {
             "qgis_version": Qgis.version(),
             "profile_folder": QgsApplication.qgisSettingsDirPath(),
             "plugins_count": len(active_plugins),
+            # Identity, so a client driving several QGIS windows can tell which one
+            # answered rather than inferring it from the port. The pid is unique and
+            # stable; the window title is what the user reads in the taskbar and
+            # already carries the project name.
+            "pid": os.getpid(),
         }
+        if self.iface is not None:
+            with contextlib.suppress(Exception):
+                info["window_title"] = self.iface.mainWindow().windowTitle()
+        return info
 
     def get_project_info(self, **kwargs):
         project = QgsProject.instance()

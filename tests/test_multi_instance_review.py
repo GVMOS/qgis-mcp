@@ -69,6 +69,111 @@ def test_strip_instance_param_is_a_no_op_with_several_instances():
         tool.parameters["properties"].pop("instance", None)
 
 
+# --- Instance identity (ports are not identity) ---
+
+
+@pytest.mark.asyncio
+async def test_listing_reports_which_qgis_answered():
+    """Two windows can share a version and a profile — pid and title separate them."""
+    import qgis_mcp.server as srv
+
+    info = {
+        "qgis_version": "4.0.2-Norrköping",
+        "profile_folder": "C:/Users/x/AppData/Roaming/QGIS/QGIS4\\profiles\\default/",
+        "plugins_count": 5,
+        "pid": 11440,
+        "window_title": "city.qgz — QGIS",
+    }
+    with (
+        patch.dict(os.environ, {"QGIS_MCP_INSTANCES": "a=9876,b=9877"}, clear=True),
+        patch("qgis_mcp.server._probe_instance", side_effect=[True, False]),
+        patch("qgis_mcp.server._send", AsyncMock(return_value=info)),
+    ):
+        result = await srv.list_qgis_instances(_ctx())
+
+    reachable, unreachable = result["instances"]
+    assert reachable["pid"] == 11440
+    assert reachable["window_title"] == "city.qgz — QGIS"
+    assert reachable["qgis_version"] == "4.0.2-Norrköping"
+    # Basename for humans, full path to separate same-named profiles under
+    # different roots. Windows mixes separators, hence the normalisation.
+    assert reachable["profile"] == "default"
+    assert reachable["profile_folder"] == info["profile_folder"]
+    # An unreachable instance is not interrogated at all.
+    assert unreachable == {"name": "b", "host": "localhost", "port": 9877, "reachable": False}
+
+
+@pytest.mark.asyncio
+async def test_identity_is_optional_on_older_plugins():
+    """pid and window_title arrived in 0.9.0; older plugins just omit them."""
+    import qgis_mcp.server as srv
+
+    old_plugin = {"qgis_version": "3.40.15-Bratislava", "profile_folder": "/p/default/"}
+    with (
+        patch.dict(os.environ, {"QGIS_MCP_INSTANCES": "a=9876"}, clear=True),
+        patch("qgis_mcp.server._probe_instance", return_value=True),
+        patch("qgis_mcp.server._send", AsyncMock(return_value=old_plugin)),
+    ):
+        result = await srv.list_qgis_instances(_ctx())
+
+    entry = result["instances"][0]
+    assert entry["qgis_version"] == "3.40.15-Bratislava"
+    assert "pid" not in entry and "window_title" not in entry
+
+
+@pytest.mark.asyncio
+async def test_listing_survives_an_instance_that_stops_answering():
+    """Probed reachable, then failed: still reported, just without identity."""
+    import qgis_mcp.server as srv
+
+    with (
+        patch.dict(os.environ, {"QGIS_MCP_INSTANCES": "a=9876"}, clear=True),
+        patch("qgis_mcp.server._probe_instance", return_value=True),
+        patch("qgis_mcp.server._send", AsyncMock(side_effect=ConnectionError("gone"))),
+    ):
+        result = await srv.list_qgis_instances(_ctx())
+
+    assert result["instances"] == [
+        {"name": "a", "host": "localhost", "port": 9876, "reachable": True}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_identity_does_not_retry():
+    """Listing must stay quick; the retry schedule would make it cost ~11s."""
+    import qgis_mcp.server as srv
+
+    with (
+        patch.dict(os.environ, {"QGIS_MCP_INSTANCES": "a=9876"}, clear=True),
+        patch("qgis_mcp.server._probe_instance", return_value=True),
+        patch("qgis_mcp.server._send", AsyncMock(return_value={})) as send,
+    ):
+        await srv.list_qgis_instances(_ctx())
+
+    assert send.await_args.kwargs["retries"] == 1
+
+
+def test_retries_override_beats_the_cold_start_schedule():
+    """retries=1 must win even when nothing has connected yet."""
+    import qgis_mcp.server as srv
+
+    with (
+        patch.dict(os.environ, {"QGIS_MCP_INSTANCES": "a=9876"}, clear=True),
+        patch("qgis_mcp.server.get_qgis_connection", side_effect=ConnectionError("nope")) as conn,
+        patch("qgis_mcp.server.time.sleep") as sleep,
+    ):
+        previously = set(srv._first_connected)
+        srv._first_connected.clear()
+        try:
+            with pytest.raises(ConnectionError):
+                srv._send_sync("get_qgis_info", retries=1)
+        finally:
+            srv._first_connected.update(previously)
+
+    assert conn.call_count == 1
+    assert sleep.call_count == 0
+
+
 # --- Retry schedule ---
 
 
