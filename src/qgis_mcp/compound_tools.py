@@ -8,6 +8,8 @@ Each compound tool takes an ``action`` string as its first parameter and
 dispatches to the same ``_send()`` logic used by the granular tools.
 """
 
+import os
+from pathlib import Path
 from typing import Any
 
 try:
@@ -134,7 +136,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
             "Actions: list, add_vector, add_raster, add_web, remove, find, create_memory, "
             "set_visibility, zoom_to, get_info, get_schema, get_extent, get_raster_info, "
             "get_crs, set_crs, get_labeling, set_labeling, duplicate, set_order, export, "
-            "save_style, apply_style, add_join\n"
+            "export_geoserver_manifest, save_style, apply_style, add_join\n"
             "- list: limit (int, default 50), offset (int, default 0)\n"
             "- add_vector: path (str), provider (str, default 'ogr'), name (str, optional)\n"
             "- add_raster: path (str), provider (str, default 'gdal'), name (str, optional)\n"
@@ -162,6 +164,9 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
             "filter_expression (str, optional) exports a subset\n"
             "- save_style: layer_id (str), path (str) — write a .qml\n"
             "- apply_style: layer_id (str), path (str) — load a .qml\n"
+            "- export_geoserver_manifest: output_dir (str, optional), include_hidden "
+            "(bool, default true), include_invalid (bool, default false), overwrite "
+            "(bool, default true)\n"
             "- add_join: target_layer_id (str), join_layer_id (str), target_field (str), "
             "join_field (str), prefix (str, default '')"
             f"{_PARAMS_NOTE}"
@@ -276,6 +281,22 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
                     "output_path": kwargs["output_path"],
                     "target_crs": kwargs.get("target_crs"),
                     "filter_expression": kwargs.get("filter_expression"),
+                },
+                timeout=TIMEOUT_LONG,
+            )
+        elif action == "export_geoserver_manifest":
+            output_dir = kwargs.get("output_dir")
+            if output_dir is None:
+                output_dir = os.environ.get("QGIS_MCP_GEOSERVER_EXPORT_DIR")
+            if output_dir is None:
+                output_dir = str(Path.home() / ".qgis_mcp" / "geoserver_styles")
+            return await _send(
+                "export_geoserver_publish_manifest",
+                {
+                    "output_dir": output_dir,
+                    "include_hidden": kwargs.get("include_hidden", True),
+                    "include_invalid": kwargs.get("include_invalid", False),
+                    "overwrite": kwargs.get("overwrite", True),
                 },
                 timeout=TIMEOUT_LONG,
             )
