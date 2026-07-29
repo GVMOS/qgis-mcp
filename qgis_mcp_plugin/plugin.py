@@ -156,8 +156,12 @@ from .compat import (
 
 _DEFAULT_HOST = "localhost"
 _DEFAULT_PORT = 9876
-# errno for "address already in use": EADDRINUSE everywhere, WSAEADDRINUSE on Windows
-_ADDR_IN_USE = frozenset({errno.EADDRINUSE, 10048})
+# "someone else already holds this port". EADDRINUSE is the usual answer, and is
+# what a second QGIS window gets since both sides set SO_EXCLUSIVEADDRUSE. Windows
+# answers WSAEACCES instead when the other holder used plain SO_REUSEADDR, which
+# means the same thing here — the spin box floor is 1024, so EACCES cannot be the
+# "privileged port" case.
+_ADDR_IN_USE = frozenset({errno.EADDRINUSE, errno.EACCES, 10048, 10013})
 _RECV_CHUNK_SIZE = 65536
 _MAX_MESSAGE_SIZE = 10 * 1024 * 1024  # 10 MB
 _HEADER_STRUCT = struct.Struct(">I")
