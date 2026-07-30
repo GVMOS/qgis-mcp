@@ -19,7 +19,7 @@ about=Socket server plugin that exposes QGIS operations to LLMs through the
     - Non-blocking TCP socket server with length-prefixed framing
     - Toolbar button with port configuration dropdown
 
-version=0.8.1
+version=0.9.0
 author=Nicolas Karasiak
 email=nicart@gmail.com
 tags=mcp,ai,claude,llm,automation,socket,remote
@@ -31,34 +31,16 @@ category=Plugins
 icon=icons/icon.png
 experimental=False
 deprecated=False
-changelog=0.8.1 : Support mcp 2.0, which renamed mcp.server.fastmcp to
-    mcp.server.mcpserver — the dependency had no upper bound and uvx resolves
-    fresh, so every new install of the MCP server failed on import; it now works
-    on both SDK majors and is capped below 3 (thanks @JAlmedaRuiz, @bernatGene,
-    #25). Fix destructive tools never asking for confirmation: the elicitation
-    call passed a plain dict where the SDK requires a pydantic model, and the
-    resulting error was swallowed as "client doesn't support elicitation", so
-    remove_layer, delete_features, execute_code, set_setting, delete_field and
-    remove_layout always proceeded (#27). Fix add_features silently accepting
-    malformed features — a wrong geometry key (geometry instead of geometry_wkt),
-    an unknown field name or unparseable WKT created null-geometry features and
-    still reported success; same validation added to update_features, which also
-    accepted an fid that no feature had. Add CI running the unit suite against
-    both the locked and the newest dependency set, so an SDK major shows up as a
-    failed build rather than a broken install.
-    0.8.0 : Fix compound tool mode being unusable — every handler took
-    **kwargs, which FastMCP/pydantic cannot express in JSON Schema and degraded
-    to a single required string, so no action could receive parameters; handlers
-    now take an explicit params object ({"action": "load", "params": {...}})
-    (thanks @kintopp, #24). Compound mode also reaches every granular command
-    again: new field and analysis groups, plus layer export/add_web/save_style/
-    apply_style/add_join and processing execute_batch/get_providers/list_models/
-    run_model. Fix execute_sql failing whenever any raster layer was loaded (all
-    project layers were added as virtual-layer sources); non-vector layers are
-    now skipped. Fix NaN/Infinity being written to the socket as bare tokens,
-    which is invalid JSON — non-finite floats serialise as null and
-    get_layer_extent reports {"empty": true} for a layer with no features. Fix
-    batch results failing return validation in compound mode. run_model now
-    defaults missing output/sink parameters to a temporary layer instead of
-    aborting.
+changelog=0.9.0 : Thirteen new tools. Database connection tools reach the
+    Browser panel's saved entries (PostGIS, GeoPackage, SpatiaLite): list them,
+    browse their tables, load a table or an SQL query as a layer, write a layer
+    back as a new table. Edit session tools drive the layer's edit buffer and
+    undo stack, which also fixes add_features, update_features and
+    delete_features writing under an open session, where the change vanished on
+    rollback. update_feature_geometry is new. set_raster_style covers
+    pseudocolor, gray, multiband RGB and hillshade. One MCP registration can
+    now address several running QGIS windows with QGIS_MCP_INSTANCES (#28), and
+    get_qgis_info and list_qgis_instances report the process id, window title
+    and profile so you can tell which window answered. The plugin refuses to
+    start on a port another QGIS window already holds.
     Earlier releases: https://github.com/nkarasiak/qgis-mcp/releases
