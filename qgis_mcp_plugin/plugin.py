@@ -3469,7 +3469,7 @@ class QgisMCPServer(QObject):
             try:
                 connections = metadata.connections(False)
             except Exception:
-                continue  # provider does not support saved connections
+                connections = {}  # provider has no saved-connection support
             for conn_name, conn in connections.items():
                 entry = {"provider": name, "name": conn_name}
                 with contextlib.suppress(Exception):
