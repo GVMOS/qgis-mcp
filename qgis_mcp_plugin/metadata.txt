@@ -19,7 +19,7 @@ about=Socket server plugin that exposes QGIS operations to LLMs through the
     - Non-blocking TCP socket server with length-prefixed framing
     - Toolbar button with port configuration dropdown
 
-version=0.9.0
+version=0.9.1
 author=Nicolas Karasiak
 email=nicart@gmail.com
 tags=mcp,ai,claude,llm,automation,socket,remote
@@ -31,7 +31,9 @@ category=Plugins
 icon=icons/icon.png
 experimental=False
 deprecated=False
-changelog=0.9.0 : Thirteen new tools. Database connection tools reach the
+changelog=0.9.1 : Skip data providers that have no saved connections without a
+    try/except/continue, which the plugin repository's security scan rejects.
+    0.9.0 : Thirteen new tools. Database connection tools reach the
     Browser panel's saved entries (PostGIS, GeoPackage, SpatiaLite): list them,
     browse their tables, load a table or an SQL query as a layer, write a layer
     back as a new table. Edit session tools drive the layer's edit buffer and
