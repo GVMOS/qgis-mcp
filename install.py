@@ -521,10 +521,9 @@ ALL_CLIENTS = ["claude-desktop", "cursor", "vscode", "windsurf", "zed", "claude-
 
 def interactive_menu() -> list[str]:
     print("\nAvailable MCP clients:")
+    tags = {"vscode": " (project-local)", "hermes": " (manual steps)"}
     for i, name in enumerate(ALL_CLIENTS, 1):
-        tag = " (project-local)" if name == "vscode" else ""
-        tag = " (prints command)" if name == "claude-code" else tag
-        print(f"  {i}. {name}{tag}")
+        print(f"  {i}. {name}{tags.get(name, '')}")
     print("  a. All")
     print("  q. Skip client configuration")
 
