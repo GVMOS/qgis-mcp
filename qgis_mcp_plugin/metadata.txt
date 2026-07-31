@@ -19,7 +19,7 @@ about=Socket server plugin that exposes QGIS operations to LLMs through the
     - Non-blocking TCP socket server with length-prefixed framing
     - Toolbar button with port configuration dropdown
 
-version=0.9.1
+version=0.9.2
 author=Nicolas Karasiak
 email=nicart@gmail.com
 tags=mcp,ai,claude,llm,automation,socket,remote
@@ -31,7 +31,14 @@ category=Plugins
 icon=icons/icon.png
 experimental=False
 deprecated=False
-changelog=0.9.1 : Skip data providers that have no saved connections without a
+changelog=0.9.2 : Fix get_layers and get_project_info failing on any project that
+    contains a non-spatial table (attribute-only, no geometry). Such tables are
+    registered in the project but have no layer-tree node, so both tools raised
+    AttributeError and became unusable for the whole project, not just for that
+    table — common with GeoPackage parent/child relations. They are now reported
+    as not visible. Thanks to Bruno Allyf (GeoTractatio) for the diagnosis and
+    the fix (#31, #32).
+    0.9.1 : Skip data providers that have no saved connections without a
     try/except/continue, which the plugin repository's security scan rejects.
     0.9.0 : Thirteen new tools. Database connection tools reach the
     Browser panel's saved entries (PostGIS, GeoPackage, SpatiaLite): list them,
