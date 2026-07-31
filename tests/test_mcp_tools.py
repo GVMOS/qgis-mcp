@@ -9,7 +9,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from mcp_compat import make_mcp_error
+from mcp_compat import connect, make_mcp_error
 
 from qgis_mcp.helpers import HEADER_STRUCT, get_auth_token
 from qgis_mcp.server import QgisMCPClient, _ConfirmSchema, _send_sync
@@ -315,6 +315,43 @@ async def test_execute_code_tool(mock_connection):
     result = await execute_code(ctx, code="print('hello')")
     assert result["stdout"] == "hello"
     ctx.info.assert_awaited_once_with("Executing PyQGIS code...")
+
+
+@pytest.mark.asyncio
+async def test_execute_code_can_be_auto_approved_by_explicit_environment_flag(
+    mock_connection,
+    monkeypatch,
+):
+    mock_connection.send_command.return_value = {
+        "status": "success",
+        "result": {"stdout": "hello", "stderr": ""},
+    }
+    from qgis_mcp.server import execute_code
+
+    monkeypatch.setenv("QGIS_MCP_AUTO_APPROVE_EXECUTE_CODE", "1")
+    ctx = _make_ctx(elicitation="decline")
+    result = await execute_code(ctx, code="print('hello')")
+
+    assert result["stdout"] == "hello"
+    ctx.elicit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_execute_code_still_elicits_without_auto_approval_flag(
+    mock_connection,
+    monkeypatch,
+):
+    mock_connection.send_command.return_value = {
+        "status": "success",
+        "result": {"stdout": "hello", "stderr": ""},
+    }
+    from qgis_mcp.server import execute_code
+
+    monkeypatch.delenv("QGIS_MCP_AUTO_APPROVE_EXECUTE_CODE", raising=False)
+    ctx = _make_ctx()
+    await execute_code(ctx, code="print('hello')")
+
+    ctx.elicit.assert_awaited_once()
 
 
 # --- QgisMCPClient tests ---
@@ -2065,6 +2102,32 @@ async def test_compound_tool_forwards_params_to_send():
     cmd, params = send.call_args[0][:2]
     assert cmd == "evaluate_expression"
     assert params["expression"] == "2+3"
+
+
+@pytest.mark.asyncio
+async def test_compound_execute_code_can_be_auto_approved(monkeypatch):
+    """The explicit execute_code opt-in also applies to compound mode."""
+    from qgis_mcp.compound_tools import FastMCP, register_compound_tools
+
+    send = AsyncMock(return_value={"stdout": "hello", "stderr": ""})
+    confirm = AsyncMock(return_value=False)
+    mcp = FastMCP("compound-auto-approval-test")
+    register_compound_tools(mcp, _send=send, _confirm_destructive=confirm)
+
+    monkeypatch.setenv("QGIS_MCP_AUTO_APPROVE_EXECUTE_CODE", "1")
+    async with connect(mcp) as client:
+        result = await client.call_tool(
+            "code",
+            {"action": "execute", "params": {"code": "print('hello')"}},
+        )
+
+    assert json.loads(result.content[0].text) == {"stdout": "hello", "stderr": ""}
+    confirm.assert_not_awaited()
+    send.assert_awaited_once_with(
+        "execute_code",
+        {"code": "print('hello')"},
+        timeout=60,
+    )
 
 
 # --- MCP server tool-discovery (no QGIS required) ---

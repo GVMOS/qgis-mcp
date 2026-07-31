@@ -743,7 +743,12 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
     ) -> dict[str, Any]:
         kwargs = params or {}
         if action == "execute":
-            if not await _confirm_destructive(
+            auto_approve = os.environ.get("QGIS_MCP_AUTO_APPROVE_EXECUTE_CODE", "").strip().lower() in {
+                "1",
+                "true",
+                "yes",
+            }
+            if not auto_approve and not await _confirm_destructive(
                 ctx, "Execute arbitrary PyQGIS code? This can modify your project and system."
             ):
                 return {"ok": False, "message": "Cancelled by user"}

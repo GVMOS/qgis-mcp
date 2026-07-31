@@ -286,6 +286,7 @@ Groups: `system`, `project`, `layer`, `features`, `selection`, `style`, `canvas`
 | `QGIS_MCP_LOG_FILE` | `~/.local/share/qgis-mcp/server.log` | Log file path (empty to disable) |
 | `QGIS_MCP_LOG_LEVEL` | `INFO` | File log level |
 | `QGIS_MCP_TOOL_MODE` | `granular` | `granular` (103 tools) or `compound` (25 grouped) |
+| `QGIS_MCP_AUTO_APPROVE_EXECUTE_CODE` | _(unset)_ | Set to `1`/`true`/`yes` to skip elicitation for `execute_code` only |
 
 ### Authentication
 

@@ -275,6 +275,14 @@ async def _confirm_destructive(ctx: Context, message: str) -> bool:
     return response.action == "accept" and bool(response.data and response.data.confirm)
 
 
+def _auto_approve_execute_code() -> bool:
+    return os.environ.get("QGIS_MCP_AUTO_APPROVE_EXECUTE_CODE", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Server lifespan
 # ---------------------------------------------------------------------------
@@ -1143,7 +1151,7 @@ async def render_map(
     "Has access to QgsProject, iface, and core QGIS classes. Returns stdout/stderr.",
 )
 async def execute_code(ctx: Context, code: str) -> dict:
-    if not await _confirm_destructive(
+    if not _auto_approve_execute_code() and not await _confirm_destructive(
         ctx, "Execute arbitrary PyQGIS code? This can modify your project and system."
     ):
         return {"ok": False, "message": "Cancelled by user"}
