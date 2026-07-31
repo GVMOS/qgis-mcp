@@ -98,8 +98,32 @@ description: Reference for all qgis-mcp MCP tools, resources, and prompts (names
 | `add_layer_from_connection` | Add Layer from Connection | — | Load a connection table, or a database-side SQL query, as a layer (60s) |
 | `import_layer_to_connection` | Import Layer to Connection | destructive | Write a vector layer into a connection as a new table; `overwrite` elicits (60s) |
 | `execute_connection_sql` | Execute Connection SQL | destructive | Server-side SQL on the connection's database (elicitation, 60s) — not the virtual-layer `execute_sql` |
-
-> Note: the "Phase 5/6/7" tools (active layer, canvas scale, labeling, layer CRS, bookmarks, map themes, project CRS, web layers, table joins, field add/delete/rename, QML styles, layout create/add-map, and the processing/analysis tools above) extend the original 52. Some are not yet listed individually in this table — see `execute_command` handlers in `qgis_mcp_plugin/plugin.py` for the authoritative set.
+| `get_active_layer` | Get Active Layer | readOnly | Currently active (selected) layer in the QGIS layer panel |
+| `set_active_layer` | Set Active Layer | idempotent | Set the active layer in the layer panel by layer ID |
+| `get_canvas_scale` | Get Canvas Scale | readOnly | Canvas scale, rotation and magnification factor |
+| `set_canvas_scale` | Set Canvas Scale | idempotent | Set canvas scale (denominator, e.g. 50000) and/or rotation (0–360°) |
+| `get_3d_screenshot` | Get 3D Screenshot | readOnly | Capture an **open** 3D Map View as an inline image (reuses its scene + camera via a layout 3D map item; optional pitch/heading/distance overrides). `get_canvas_screenshot` cannot grab the OpenGL view |
+| `get_layer_labeling` | Get Layer Labeling | readOnly | Labeling config of a vector layer: enabled, field, font size, color |
+| `set_layer_labeling` | Set Layer Labeling | — | Configure labels (`enabled`, `field_name`, `font_size`, `color`) |
+| `apply_style_qml` | Apply Style QML | — | Apply a QML style file to a layer |
+| `save_style_qml` | Save Style QML | — | Save a layer's style to a QML file |
+| `get_layer_crs` | Get Layer CRS | readOnly | Layer CRS: EPSG code, description, geographic flag, PROJ4 string |
+| `set_layer_crs` | Set Layer CRS | — | Set a layer's CRS — reinterprets coordinates, does **not** reproject data |
+| `set_project_crs` | Set Project CRS | — | Set the project CRS (changes how layers project onto the canvas) |
+| `get_bookmarks` | Get Bookmarks | readOnly | Spatial bookmarks (name, group, extent, CRS) |
+| `add_bookmark` | Add Bookmark | — | Add a spatial bookmark from a name + extent and CRS |
+| `remove_bookmark` | Remove Bookmark | destructive | Remove a spatial bookmark by ID |
+| `get_map_themes` | Get Map Themes | readOnly | Map themes (visibility presets) and the layers each shows |
+| `add_map_theme` | Add Map Theme | — | Save current layer visibility as a theme (updates an existing name) |
+| `apply_map_theme` | Apply Map Theme | idempotent | Restore the layer visibility state saved in a theme |
+| `remove_map_theme` | Remove Map Theme | destructive | Remove a map theme by name |
+| `add_web_layer` | Add Web Layer | — | Add an XYZ / WMS / WFS layer to the project |
+| `add_table_join` | Add Table Join | — | Join a second layer's attributes onto a vector layer |
+| `add_field` | Add Field | — | Add a field (`string`, `int`, `double`, `bool`, `date`, `datetime`) |
+| `rename_field` | Rename Field | — | Rename a field on a vector layer |
+| `delete_field` | Delete Field | destructive | Delete a field from a vector layer |
+| `create_layout` | Create Layout | — | Create a new print layout |
+| `add_layout_map` | Add Layout Map | — | Add a map item to a layout at a position and size (mm) |
 
 ## MCP Resources
 
@@ -112,6 +136,7 @@ description: Reference for all qgis-mcp MCP tools, resources, and prompts (names
 | `qgis://layers/{layer_id}/features` | Sample features (first 10) |
 | `qgis://layers/{layer_id}/schema` | Field names, types, lengths |
 | `qgis://llms.txt` | LLM context: tool categories, usage patterns, quick start guide |
+| `qgis://cache/{cache_id}` | A large tool result parked in the server-side cache (`_resource_cache`) instead of inlined |
 
 ## MCP Prompts
 
