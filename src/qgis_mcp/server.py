@@ -1278,20 +1278,32 @@ async def get_raster_info(
 @mcp.tool(
     title="Execute Processing",
     description="Execute a QGIS Processing algorithm. Use get_algorithm_help to discover parameters. "
-    "Layer params accept layer IDs or file paths. Set OUTPUT to 'memory:' for temp layers.",
+    "Layer params accept layer IDs or file paths. Set OUTPUT to 'memory:' for temp layers. "
+    "timeout: seconds before the algorithm is cancelled (default 55). Raise it for heavy "
+    "raster work, but note that long jobs hold the QGIS session for their duration.",
 )
 async def execute_processing(
     ctx: Context,
     algorithm: str,
     parameters: dict,
+    timeout: int | None = None,
     instance: str | None = None,
 ) -> dict:
     await ctx.info(f"Running algorithm: {algorithm}")
     await ctx.report_progress(0, 100)
+    params: dict[str, Any] = {"algorithm": algorithm, "parameters": parameters}
+    # Keep the two deadlines ordered: the plugin must give up first so the
+    # failure comes back as a real message instead of the client timing out
+    # while QGIS keeps grinding on an orphaned job.
+    if timeout is None:
+        socket_timeout = TIMEOUT_LONG
+    else:
+        params["timeout"] = timeout
+        socket_timeout = int(timeout) + 5
     result = await _send(
         "execute_processing",
-        {"algorithm": algorithm, "parameters": parameters},
-        timeout=TIMEOUT_LONG,
+        params,
+        timeout=socket_timeout,
         instance=instance,
     )
     await ctx.report_progress(100, 100)
