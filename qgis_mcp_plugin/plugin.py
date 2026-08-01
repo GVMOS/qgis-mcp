@@ -857,7 +857,10 @@ class QgisMCPServer(QObject):
         if qvariant.isNull():
             return None
         value = qvariant.value()
-        if isinstance(value, int | float | str | bool | type(None)):
+        # Tuple form, not `int | float | ...`: PEP 604 unions in isinstance need
+        # Python 3.10, and QGIS ships 3.9 well past 3.28 (3.42 still does). The
+        # union form raises TypeError there, which broke every feature read.
+        if isinstance(value, (int, float, str, bool, type(None))):
             return value
         elif hasattr(value, "toPyDate"):
             return value.toPyDate().isoformat()
@@ -873,7 +876,10 @@ class QgisMCPServer(QObject):
         """Convert a feature attribute value to a JSON-serializable type."""
         if isinstance(value, QVariant):
             return self._convert_to_python_type(value)
-        if isinstance(value, int | float | str | bool | type(None)):
+        # Tuple form, not `int | float | ...`: PEP 604 unions in isinstance need
+        # Python 3.10, and QGIS ships 3.9 well past 3.28 (3.42 still does). The
+        # union form raises TypeError there, which broke every feature read.
+        if isinstance(value, (int, float, str, bool, type(None))):
             return value
         try:
             return str(value)
