@@ -195,6 +195,7 @@ from .wire import (
     OutboundBuffer,
     OutboundOverflow,
     frame,
+    zip_strict,
 )
 
 _DEFAULT_HOST = "localhost"
@@ -1863,7 +1864,7 @@ class QgisMCPServer(QObject):
                 renderer.setBlueContrastEnhancement,
             )
             ranges = []
-            for setter, b in zip(setters, bands, strict=True):
+            for setter, b in zip_strict(setters, bands):
                 lo, hi = self._band_range(provider, b, min_value, max_value)
                 enhancement = QgsContrastEnhancement(provider.dataType(b))
                 enhancement.setContrastEnhancementAlgorithm(
@@ -3592,7 +3593,7 @@ class QgisMCPServer(QObject):
         siblings = list(parent.children())
         slots = sorted(siblings.index(n) for n in nodes)
         new_order = list(siblings)
-        for slot, node in zip(slots, nodes, strict=True):
+        for slot, node in zip_strict(slots, nodes):
             new_order[slot] = node
         clones = [n.clone() for n in new_order]
         parent.insertChildNodes(0, clones)

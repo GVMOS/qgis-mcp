@@ -77,6 +77,36 @@ def test_no_runtime_evaluated_pep604_annotations():
     )
 
 
+    # keyword arguments added to builtins after 3.9 -> "takes no keyword arguments"
+NEWER_THAN_39_KWARGS = {
+    "zip": {"strict"},
+}
+
+
+def test_no_post_39_builtin_keyword_arguments():
+    """`zip(a, b, strict=True)` raises TypeError on 3.9.
+
+    Not a syntax error and not an import error — it fails only when that line
+    executes, which is why `set_layer_order` and `set_raster_style` shipped
+    broken while the suite stayed green on 3.12.
+    """
+    offenders = []
+    for name, src in _plugin_sources():
+        for node in ast.walk(ast.parse(src)):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+                continue
+            banned = NEWER_THAN_39_KWARGS.get(node.func.id)
+            if not banned:
+                continue
+            for kw in node.keywords:
+                if kw.arg in banned:
+                    offenders.append(f"{name}:{node.lineno} {node.func.id}({kw.arg}=)")
+    assert not offenders, (
+        "builtin keyword argument newer than Python 3.9 — TypeError on the "
+        f"interpreter QGIS bundles. Found: {offenders}"
+    )
+
+
 def test_plugin_modules_parse_under_py39_grammar():
     """Nothing in the plugin may use syntax newer than 3.9 (e.g. match/case)."""
     for name, src in _plugin_sources():

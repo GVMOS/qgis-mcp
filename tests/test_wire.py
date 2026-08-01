@@ -294,3 +294,13 @@ def test_framing_stays_aligned_across_successive_large_responses():
         client.disconnect()
         thread.join(timeout=5)
         listener.close()
+
+
+def test_zip_strict_matches_builtin_behaviour():
+    assert list(wire.zip_strict([1, 2], "ab")) == [(1, "a"), (2, "b")]
+
+
+def test_zip_strict_rejects_length_mismatch():
+    """Mirrors zip(strict=True): silently truncating is the bug it prevents."""
+    with pytest.raises(ValueError):
+        list(wire.zip_strict([1, 2, 3], "ab"))

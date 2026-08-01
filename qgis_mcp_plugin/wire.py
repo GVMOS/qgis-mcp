@@ -49,6 +49,25 @@ def frame(payload: bytes) -> bytes:
     return HEADER_STRUCT.pack(len(payload)) + payload
 
 
+def zip_strict(*iterables):
+    """``zip(*iterables, strict=True)`` that also works on Python 3.9.
+
+    The ``strict`` keyword landed in 3.10, and QGIS bundles 3.9 well past the
+    plugin's 3.28 minimum. Calling it there raises "zip() takes no keyword
+    arguments" at call time — an error CI never sees, because the test suite
+    runs on a newer interpreter.
+
+    Inputs are materialised so length can be compared up front; every call
+    site here passes short, already-realised sequences.
+    """
+    columns = [list(it) for it in iterables]
+    if len({len(c) for c in columns}) > 1:
+        raise ValueError(
+            "zip_strict() argument lengths differ: " + ", ".join(str(len(c)) for c in columns)
+        )
+    return zip(*columns)
+
+
 class OutboundBuffer:
     """Bytes queued for one non-blocking client socket.
 
