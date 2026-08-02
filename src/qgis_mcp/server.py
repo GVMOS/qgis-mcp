@@ -2243,10 +2243,11 @@ async def list_connections(
 
 @mcp.tool(
     title="Create PostgreSQL Connection",
-    description="Validate and save a PostgreSQL Browser-panel connection. Credentials must be held in "
+    description="Validate and save a new PostgreSQL Browser-panel connection. Credentials must be held in "
     "an existing QGIS Authentication Manager configuration; passwords are never accepted. Fails "
-    "if name already exists or the database cannot be reached. ssl_mode is one of prefer "
-    "(default), disable, allow, require, verify-ca, or verify-full.",
+    "if name already exists or the database cannot be reached. port must be the actual database "
+    "port supplied by the caller or user — this tool does not assume a default such as 5432. "
+    "ssl_mode is one of prefer (default), disable, allow, require, verify-ca, or verify-full.",
     structured_output=True,
 )
 async def create_postgresql_connection(
