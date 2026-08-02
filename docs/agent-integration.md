@@ -111,7 +111,7 @@ by asking the agent:
 List the available MCP tools for QGIS.
 ```
 
-You should see 117 tools (e.g. `ping`, `get_layers`, `render_map`, …).
+You should see 118 tools (e.g. `ping`, `get_layers`, `render_map`, …).
 
 ### Step 3 — Check the connection
 
@@ -215,7 +215,7 @@ to get the full bat-file content and YAML snippet pre-filled with your local pat
 | `QGIS_MCP_TRANSPORT` | `stdio` | MCP transport: `stdio` or `streamable-http` |
 | `QGIS_MCP_LOG_FILE` | `~/.local/share/qgis-mcp/server.log` | Log file path (empty to disable) |
 | `QGIS_MCP_LOG_LEVEL` | `INFO` | File log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
-| `QGIS_MCP_TOOL_MODE` | `granular` | `granular` (117 tools) or `compound` (27 grouped tools) |
+| `QGIS_MCP_TOOL_MODE` | `granular` | `granular` (118 tools) or `compound` (27 grouped tools) |
 
 ---
 

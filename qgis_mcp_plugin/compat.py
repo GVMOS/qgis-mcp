@@ -20,6 +20,7 @@ from qgis.core import (
     QgsAggregateCalculator,
     QgsColorRampShader,
     QgsContrastEnhancement,
+    QgsDataSourceUri,
     QgsLayoutExporter,
     QgsMapLayer,
     QgsProcessingParameterDefinition,
@@ -233,6 +234,17 @@ CONN_CAP_EXECUTE_SQL = _enum(
 )
 
 # ── Vector layer export result ───────────────────────────────────────
+URI_SSL_PREFER = _enum((QgsDataSourceUri, "SslMode.SslPrefer"), (QgsDataSourceUri, "SslPrefer"))
+URI_SSL_DISABLE = _enum((QgsDataSourceUri, "SslMode.SslDisable"), (QgsDataSourceUri, "SslDisable"))
+URI_SSL_ALLOW = _enum((QgsDataSourceUri, "SslMode.SslAllow"), (QgsDataSourceUri, "SslAllow"))
+URI_SSL_REQUIRE = _enum((QgsDataSourceUri, "SslMode.SslRequire"), (QgsDataSourceUri, "SslRequire"))
+URI_SSL_VERIFY_CA = _enum(
+    (QgsDataSourceUri, "SslMode.SslVerifyCa"), (QgsDataSourceUri, "SslVerifyCa")
+)
+URI_SSL_VERIFY_FULL = _enum(
+    (QgsDataSourceUri, "SslMode.SslVerifyFull"), (QgsDataSourceUri, "SslVerifyFull")
+)
+
 EXPORT_SUCCESS = _enum(
     (Qgis, "VectorExportResult.Success"),
     (QgsVectorLayerExporter, "NoError"),

@@ -183,6 +183,12 @@ from .compat import (
     SIMPLIFY_GEOMETRY,
     TOOLBUTTON_ICON_ONLY,
     TOOLBUTTON_MENU_POPUP,
+    URI_SSL_ALLOW,
+    URI_SSL_DISABLE,
+    URI_SSL_PREFER,
+    URI_SSL_REQUIRE,
+    URI_SSL_VERIFY_CA,
+    URI_SSL_VERIFY_FULL,
     WKB_NO_GEOMETRY,
 )
 
@@ -554,6 +560,7 @@ class QgisMCPServer(QObject):
                 "get_3d_screenshot": self.get_3d_screenshot,
                 # Phase 10 — database connections
                 "list_connections": self.list_connections,
+                "create_postgresql_connection": self.create_postgresql_connection,
                 "list_connection_tables": self.list_connection_tables,
                 "add_layer_from_connection": self.add_layer_from_connection,
                 "import_layer_to_connection": self.import_layer_to_connection,
@@ -3442,6 +3449,14 @@ class QgisMCPServer(QObject):
         ("view", CONN_TABLE_VIEW),
         ("aspatial", CONN_TABLE_ASPATIAL),
     )
+    _POSTGRESQL_SSL_MODES: ClassVar[dict] = {
+        "prefer": URI_SSL_PREFER,
+        "disable": URI_SSL_DISABLE,
+        "allow": URI_SSL_ALLOW,
+        "require": URI_SSL_REQUIRE,
+        "verify-ca": URI_SSL_VERIFY_CA,
+        "verify-full": URI_SSL_VERIFY_FULL,
+    }
 
     @classmethod
     def _redact_uri(cls, uri):
@@ -3464,7 +3479,7 @@ class QgisMCPServer(QObject):
         return connections[connection]
 
     def list_connections(self, provider=None, **kwargs):
-        """List saved data source connections (PostGIS, GeoPackage, ...)."""
+        """List saved data source connections (PostgreSQL, GeoPackage, ...)."""
         registry = QgsProviderRegistry.instance()
         providers = [provider] if provider else registry.providerList()
         entries = []
@@ -3484,6 +3499,70 @@ class QgisMCPServer(QObject):
                     entry["uri"] = self._redact_uri(conn.uri())
                 entries.append(entry)
         return {"connections": entries, "count": len(entries)}
+
+    def create_postgresql_connection(
+        self, name, host, port, database, auth_config_id, ssl_mode="prefer", **kwargs
+    ):
+        """Validate and persist a password-free PostgreSQL Browser connection."""
+        name = str(name).strip()
+        host = str(host).strip()
+        database = str(database).strip()
+        auth_config_id = str(auth_config_id).strip()
+        if not name:
+            raise Exception("Connection name must not be empty")
+        if not host:
+            raise Exception("PostgreSQL host must not be empty")
+        if not database:
+            raise Exception("PostgreSQL database must not be empty")
+        if not auth_config_id:
+            raise Exception("Authentication configuration ID must not be empty")
+        try:
+            port = int(port)
+        except (TypeError, ValueError) as exc:
+            raise Exception("PostgreSQL port must be an integer from 1 to 65535") from exc
+        if not 1 <= port <= 65535:
+            raise Exception("PostgreSQL port must be an integer from 1 to 65535")
+
+        normalized_ssl_mode = str(ssl_mode).strip().lower().replace("_", "-")
+        ssl_value = self._POSTGRESQL_SSL_MODES.get(normalized_ssl_mode)
+        if ssl_value is None:
+            allowed = ", ".join(self._POSTGRESQL_SSL_MODES)
+            raise Exception(f"Unknown SSL mode {ssl_mode!r}; expected one of: {allowed}")
+
+        auth_manager = QgsApplication.authManager()
+        if auth_config_id not in auth_manager.configIds():
+            raise Exception(f"Authentication configuration {auth_config_id!r} does not exist")
+
+        metadata = QgsProviderRegistry.instance().providerMetadata("postgres")
+        if metadata is None:
+            raise Exception("The PostgreSQL provider is not available in this QGIS installation")
+        try:
+            existing = metadata.connections(False)
+        except Exception as exc:
+            raise Exception(f"PostgreSQL saved connections are unavailable: {exc}") from exc
+        if name in existing:
+            raise Exception(f"A saved PostgreSQL connection named {name!r} already exists")
+
+        uri = QgsDataSourceUri()
+        uri.setConnection(host, str(port), database, "", "", ssl_value, auth_config_id)
+        try:
+            connection = metadata.createConnection(uri.uri(False), {})
+            connection.executeSql("SELECT 1")
+        except Exception as exc:
+            raise Exception(f"Failed to connect to PostgreSQL: {exc}") from exc
+
+        metadata.saveConnection(connection, name)
+        return {
+            "ok": True,
+            "provider": "postgres",
+            "name": name,
+            "host": host,
+            "port": port,
+            "database": database,
+            "auth_config_id": auth_config_id,
+            "ssl_mode": normalized_ssl_mode,
+            "validated": True,
+        }
 
     def list_connection_tables(self, provider, connection, schema=None, **kwargs):
         """List schemas and tables reachable through a saved connection."""

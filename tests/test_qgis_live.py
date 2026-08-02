@@ -998,3 +998,23 @@ def test_list_connections_and_unknown_provider(client):
     bad = client.send_command("list_connections", {"provider": "nosuchprovider"})
     assert bad["status"] == "error"
     assert "Unknown data provider" in bad["message"]
+
+
+def test_create_postgresql_connection_rejects_unknown_auth_config(client):
+    name = f"missing_auth_connection"
+    response = client.send_command(
+        "create_postgresql_connection",
+        {
+            "name": name,
+            "host": "db.example.test",
+            "port": 5432,
+            "database": "gis",
+            "auth_config_id": "missing_auth_config",
+        },
+    )
+    assert response["status"] == "error"
+    assert "Authentication configuration" in response["message"]
+
+    connections = client.send_command("list_connections", {"provider": "postgres"})
+    assert connections["status"] == "success"
+    assert name not in {entry["name"] for entry in connections["result"]["connections"]}
