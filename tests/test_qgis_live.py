@@ -1001,7 +1001,7 @@ def test_list_connections_and_unknown_provider(client):
 
 
 def test_create_postgresql_connection_rejects_unknown_auth_config(client):
-    name = f"missing_auth_connection"
+    name = "missing_auth_connection"
     response = client.send_command(
         "create_postgresql_connection",
         {
