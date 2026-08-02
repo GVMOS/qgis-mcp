@@ -1,9 +1,11 @@
 """Unit tests for MCP server tools with mocked socket connection."""
 
+import contextlib
 import json
 import os
 import sys
-from unittest.mock import AsyncMock, MagicMock, patch
+import threading
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
@@ -104,7 +106,7 @@ def test_send_retries_on_broken_pipe():
     second_client.send_command.return_value = {"status": "success", "result": {"pong": True}}
 
     # Simulate already-connected state (shorter retry schedule)
-    srv._first_successful_connection = True
+    srv._first_connected.add("default")
     try:
         with (
             patch("qgis_mcp.server.get_qgis_connection", side_effect=[first_client, second_client]),
@@ -113,7 +115,7 @@ def test_send_retries_on_broken_pipe():
         ):
             result = _send_sync("ping")
     finally:
-        srv._first_successful_connection = False
+        srv._first_connected.discard("default")
 
     assert result == {"pong": True}
     first_client.send_command.assert_called_once()
@@ -130,7 +132,7 @@ def test_send_raises_after_retry_fails():
     client.send_command.side_effect = ConnectionResetError("Connection reset")
 
     # Simulate already-connected state (3 retries)
-    srv._first_successful_connection = True
+    srv._first_connected.add("default")
     try:
         with (
             patch("qgis_mcp.server.get_qgis_connection", return_value=client),
@@ -140,7 +142,7 @@ def test_send_raises_after_retry_fails():
         ):
             _send_sync("ping")
     finally:
-        srv._first_successful_connection = False
+        srv._first_connected.discard("default")
 
     assert client.send_command.call_count == 3  # 3 attempts with backoff
 
@@ -154,7 +156,7 @@ def test_first_connect_uses_patient_retries():
     client.socket.getpeername.return_value = ("localhost", 9876)
     client.send_command.side_effect = ConnectionRefusedError("Connection refused")
 
-    srv._first_successful_connection = False
+    srv._first_connected.discard("default")
     try:
         with (
             patch("qgis_mcp.server.get_qgis_connection", return_value=client),
@@ -164,7 +166,7 @@ def test_first_connect_uses_patient_retries():
         ):
             _send_sync("ping")
     finally:
-        srv._first_successful_connection = False
+        srv._first_connected.discard("default")
 
     assert client.send_command.call_count == 5  # 5 patient retries
     # Verify escalating delays: 1.0, 2.0, 3.0, 5.0
@@ -1180,12 +1182,13 @@ def test_env_var_host_port():
 
         import qgis_mcp.server as srv
 
-        srv._qgis_connection = None
+        srv._qgis_connections.clear()
         try:
             srv.get_qgis_connection()
             mock_client_cls.assert_called_once_with(host="192.168.1.100", port=9999)
         finally:
-            srv._qgis_connection = None
+            srv._qgis_connections.clear()
+            srv._connection_validated_at.clear()
 
 
 @pytest.mark.asyncio
@@ -2312,3 +2315,713 @@ async def test_compound_field_and_analysis_dispatch():
         cmd, params = send.call_args[0][:2]
         assert cmd == "run_model"
         assert params == {"model": "model:x", "parameters": {}}
+
+
+# --- Multi-instance configuration (QGIS_MCP_INSTANCES) ---
+
+
+def test_parse_instances_name_port():
+    """`name=port` entries take the default host."""
+    from qgis_mcp.server import parse_instances
+
+    assert parse_instances("default=9876,b=9877") == {
+        "default": ("localhost", 9876),
+        "b": ("localhost", 9877),
+    }
+
+
+def test_parse_instances_host_port():
+    """`name=host:port` entries carry their own host."""
+    from qgis_mcp.server import parse_instances
+
+    assert parse_instances("lab=192.168.1.5:9876, local = 9877 ") == {
+        "lab": ("192.168.1.5", 9876),
+        "local": ("localhost", 9877),
+    }
+
+
+def test_parse_instances_uses_supplied_default_host():
+    """A hostless entry inherits the QGIS_MCP_HOST-derived default."""
+    from qgis_mcp.server import parse_instances
+
+    assert parse_instances("a=9876", default_host="10.0.0.2") == {"a": ("10.0.0.2", 9876)}
+
+
+def test_parse_instances_preserves_order():
+    from qgis_mcp.server import parse_instances
+
+    assert list(parse_instances("z=9876,a=9877,m=9878")) == ["z", "a", "m"]
+
+
+@pytest.mark.parametrize(
+    ("spec", "match"),
+    [
+        ("9876", "must be 'name=port'"),
+        ("a=", "must be 'name=port'"),
+        ("bad name=9876", r"\[A-Za-z0-9_-\]\+"),
+        ("a.b=9876", r"\[A-Za-z0-9_-\]\+"),
+        ("a=9876,a=9877", "duplicate instance name"),
+        ("a=notaport", "must be an integer 1-65535"),
+        ("a=0", "must be an integer 1-65535"),
+        ("a=70000", "must be an integer 1-65535"),
+        (",  ,", "lists no instances"),
+    ],
+)
+def test_parse_instances_rejects_invalid(spec, match):
+    from qgis_mcp.server import parse_instances
+
+    with pytest.raises(ValueError, match=match):
+        parse_instances(spec)
+
+
+def test_get_instances_unset_env_is_backward_compatible():
+    """No QGIS_MCP_INSTANCES → exactly one 'default' instance on the old defaults."""
+    from qgis_mcp.server import get_instances
+
+    with patch.dict(os.environ, {}, clear=True):
+        assert get_instances() == {"default": ("localhost", 9876)}
+
+
+def test_get_instances_unset_env_honours_host_port():
+    from qgis_mcp.server import get_instances
+
+    with patch.dict(os.environ, {"QGIS_MCP_HOST": "10.0.0.9", "QGIS_MCP_PORT": "9999"}, clear=True):
+        assert get_instances() == {"default": ("10.0.0.9", 9999)}
+
+
+def test_get_instances_rejects_bad_port_env():
+    from qgis_mcp.server import get_instances
+
+    with (
+        patch.dict(os.environ, {"QGIS_MCP_PORT": "abc"}, clear=True),
+        pytest.raises(ValueError, match="QGIS_MCP_PORT must be an integer 1-65535"),
+    ):
+        get_instances()
+
+
+def test_get_instances_reads_instances_env():
+    from qgis_mcp.server import get_instances
+
+    with patch.dict(os.environ, {"QGIS_MCP_INSTANCES": "a=9876,b=lab:9877"}, clear=True):
+        assert get_instances() == {"a": ("localhost", 9876), "b": ("lab", 9877)}
+
+
+def test_resolve_instance_defaults_to_default():
+    from qgis_mcp.server import resolve_instance
+
+    with patch.dict(os.environ, {}, clear=True):
+        assert resolve_instance(None) == "default"
+        assert resolve_instance("default") == "default"
+
+
+def test_unknown_instance_error_lists_configured_names():
+    from qgis_mcp.server import resolve_instance
+
+    with (
+        patch.dict(os.environ, {"QGIS_MCP_INSTANCES": "a=9876,b=9877"}, clear=True),
+        pytest.raises(ValueError, match=r"Unknown QGIS instance: 'nope'.*Configured instances: a, b"),
+    ):
+        resolve_instance("nope")
+
+
+def test_instance_less_call_falls_back_to_first_entry():
+    """Without a 'default' entry, an instance-less call uses the FIRST configured one.
+
+    Requiring an entry literally named 'default' would break the natural config
+    'a=9876,b=9877' for every instance-less call, which is how tools are
+    overwhelmingly invoked.
+    """
+    from qgis_mcp.server import resolve_instance
+
+    with patch.dict(os.environ, {"QGIS_MCP_INSTANCES": "a=9876,b=9877"}, clear=True):
+        assert resolve_instance(None) == "a"
+    # Written in the other order, the other entry wins — insertion order, not sorted.
+    with patch.dict(os.environ, {"QGIS_MCP_INSTANCES": "zeta=9877,alpha=9876"}, clear=True):
+        assert resolve_instance(None) == "zeta"
+
+
+def test_explicit_default_entry_wins_over_first():
+    """'default' is preferred wherever it appears in the spec, not just first."""
+    from qgis_mcp.server import resolve_instance
+
+    with patch.dict(os.environ, {"QGIS_MCP_INSTANCES": "a=9876,default=9877"}, clear=True):
+        assert resolve_instance(None) == "default"
+
+
+def test_compound_mode_refuses_multiple_instances():
+    """Compound tools cannot select an instance, so the combination must not start.
+
+    Silently routing every compound call to one instance while the config
+    advertises several is a wrong-instance write with no error — worse than
+    refusing to boot.
+    """
+    import subprocess
+
+    env = {
+        **os.environ,
+        "QGIS_MCP_TOOL_MODE": "compound",
+        "QGIS_MCP_INSTANCES": "a=9876,b=9877",
+        "PYTHONPATH": os.path.join(os.path.dirname(__file__), "..", "src"),
+    }
+    proc = subprocess.run(
+        [sys.executable, "-c", "import qgis_mcp.server"],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode != 0
+    assert "does not support multiple instances" in proc.stderr
+
+
+def test_compound_mode_allows_single_instance():
+    """Single-instance compound mode is unaffected by the guard."""
+    import subprocess
+
+    env = {
+        **os.environ,
+        "QGIS_MCP_TOOL_MODE": "compound",
+        "QGIS_MCP_INSTANCES": "solo=9876",
+        "PYTHONPATH": os.path.join(os.path.dirname(__file__), "..", "src"),
+    }
+    proc = subprocess.run(
+        [sys.executable, "-c", "import qgis_mcp.server"],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_pool_keys_connections_by_instance():
+    """Two instance names produce two distinct, separately cached clients."""
+    import qgis_mcp.server as srv
+
+    def make_client(host, port):
+        m = MagicMock(spec=QgisMCPClient)
+        m.connect.return_value = True
+        m.socket = MagicMock()
+        return m
+
+    with (
+        patch.dict(os.environ, {"QGIS_MCP_INSTANCES": "a=9876,b=9877"}, clear=True),
+        patch("qgis_mcp.server.QgisMCPClient", side_effect=make_client) as mock_cls,
+    ):
+        srv._qgis_connections.clear()
+        srv._connection_validated_at.clear()
+        try:
+            client_a = srv.get_qgis_connection("a")
+            client_b = srv.get_qgis_connection("b")
+
+            assert client_a is not client_b
+            assert srv._qgis_connections == {"a": client_a, "b": client_b}
+            assert mock_cls.call_args_list == [
+                call(host="localhost", port=9876),
+                call(host="localhost", port=9877),
+            ]
+            # Within the TTL the pooled client is reused, not recreated.
+            assert srv.get_qgis_connection("a") is client_a
+            assert mock_cls.call_count == 2
+        finally:
+            srv._qgis_connections.clear()
+            srv._connection_validated_at.clear()
+
+
+def test_get_qgis_connection_rejects_unknown_instance():
+    import qgis_mcp.server as srv
+
+    with (
+        patch.dict(os.environ, {"QGIS_MCP_INSTANCES": "a=9876"}, clear=True),
+        pytest.raises(ValueError, match="Unknown QGIS instance: 'ghost'"),
+    ):
+        srv.get_qgis_connection("ghost")
+
+
+def test_invalidate_connection_only_drops_its_own_instance():
+    import qgis_mcp.server as srv
+
+    client_a = MagicMock(spec=QgisMCPClient)
+    client_b = MagicMock(spec=QgisMCPClient)
+    srv._qgis_connections.update({"a": client_a, "b": client_b})
+    srv._connection_validated_at.update({"a": 1.0, "b": 2.0})
+    try:
+        srv._invalidate_connection("a")
+        assert srv._qgis_connections == {"b": client_b}
+        assert srv._connection_validated_at == {"b": 2.0}
+        client_a.disconnect.assert_called_once()
+        client_b.disconnect.assert_not_called()
+    finally:
+        srv._qgis_connections.clear()
+        srv._connection_validated_at.clear()
+
+
+def test_locks_are_per_instance():
+    """A call in flight on one instance must not serialize calls to another.
+
+    Holds instance 'a's lock (as a live send would) and checks that a send to
+    'b' completes while a second send to 'a' blocks until the lock is released.
+    """
+    import qgis_mcp.server as srv
+
+    client = MagicMock(spec=QgisMCPClient)
+    client.socket = MagicMock()
+    client.send_command.return_value = {"status": "success", "result": {"pong": True}}
+
+    assert srv._get_instance_lock("a") is not srv._get_instance_lock("b")
+    assert srv._get_instance_lock("a") is srv._get_instance_lock("a")
+
+    with (
+        patch.dict(os.environ, {"QGIS_MCP_INSTANCES": "a=9876,b=9877"}, clear=True),
+        patch("qgis_mcp.server.get_qgis_connection", return_value=client),
+    ):
+        srv._first_connected.update({"a", "b"})
+        done_b = threading.Event()
+
+        def send_to_b():
+            _send_sync("ping", instance="b")
+            done_b.set()
+
+        # Both threads are daemons and time-limited: with a single global lock
+        # they would never finish, and the test must fail rather than hang.
+        other = threading.Thread(target=send_to_b, daemon=True)
+        blocked = threading.Thread(target=_send_sync, args=("ping", None, 30, "a"), daemon=True)
+        try:
+            with srv._get_instance_lock("a"):
+                # 'b' is unaffected by 'a' being busy...
+                other.start()
+                assert done_b.wait(timeout=5), "call to 'b' serialized behind in-flight call to 'a'"
+                # ...while a second call to 'a' really does wait
+                blocked.start()
+                blocked.join(timeout=0.3)
+                assert blocked.is_alive(), "second call to 'a' was not serialized"
+            blocked.join(timeout=5)
+            assert not blocked.is_alive(), "call to 'a' did not proceed after the lock was released"
+        finally:
+            for thread in (other, blocked):
+                if thread.ident is not None:  # started; a failed assert may skip one
+                    thread.join(timeout=5)
+            srv._first_connected.difference_update({"a", "b"})
+
+
+def test_send_sync_resolves_instance_and_uses_its_connection():
+    import qgis_mcp.server as srv
+
+    client = MagicMock(spec=QgisMCPClient)
+    client.socket = MagicMock()
+    client.send_command.return_value = {"status": "success", "result": {"ok": True}}
+
+    with (
+        patch.dict(os.environ, {"QGIS_MCP_INSTANCES": "a=9876,b=9877"}, clear=True),
+        patch("qgis_mcp.server.get_qgis_connection", return_value=client) as mock_get,
+    ):
+        srv._first_connected.update({"a", "b"})
+        try:
+            assert _send_sync("ping", instance="b") == {"ok": True}
+        finally:
+            srv._first_connected.difference_update({"a", "b"})
+    mock_get.assert_called_once_with("b")
+
+
+def test_send_sync_rejects_unknown_instance(mock_connection):
+    with (
+        patch.dict(os.environ, {"QGIS_MCP_INSTANCES": "a=9876"}, clear=True),
+        pytest.raises(ValueError, match="Unknown QGIS instance: 'b'"),
+    ):
+        _send_sync("ping", instance="b")
+    mock_connection.send_command.assert_not_called()
+
+
+def test_send_sync_defaults_to_default_instance(mock_connection):
+    """No instance argument keeps the pre-multi-instance behaviour."""
+    import qgis_mcp.server as srv
+
+    with (
+        patch.dict(os.environ, {}, clear=True),
+        patch("qgis_mcp.server.get_qgis_connection", return_value=mock_connection) as mock_get,
+    ):
+        srv._first_connected.add("default")
+        mock_connection.send_command.return_value = {"status": "success", "result": {"pong": True}}
+        try:
+            assert _send_sync("ping") == {"pong": True}
+        finally:
+            srv._first_connected.discard("default")
+    mock_get.assert_called_once_with("default")
+
+
+@pytest.mark.asyncio
+async def test_every_tool_forwards_instance():
+    """Every @mcp.tool function must pass its `instance` argument to _send_sync.
+
+    Calls each registered tool with instance='probe' and a stubbed _send_sync,
+    then asserts the stub only ever saw 'probe'. A tool that drops the argument
+    (or forgets to declare it) silently talks to the wrong QGIS window, which no
+    per-tool assertion would catch.
+    """
+    import inspect
+
+    import qgis_mcp.server as srv
+
+    seen: list = []
+
+    def fake_send_sync(command_type, params=None, timeout=30, instance=None, retries=None):
+        # Mirror _send_sync's real signature: _send passes every argument
+        # positionally, so a stub that is one parameter short raises TypeError and
+        # the suppress() below would hide it as "never reached _send_sync".
+        seen.append((command_type, instance))
+        return {}
+
+    def dummy(annotation):
+        text = str(annotation)
+        for needle, value in (("list", []), ("dict", {}), ("bool", False), ("float", 1.0), ("int", 1)):
+            if needle in text:
+                return value
+        return "x"
+
+    tools = await srv.mcp.list_tools()
+    tool_fns = [getattr(srv, t.name) for t in tools if hasattr(srv, t.name)]
+    assert len(tool_fns) == len(tools), "some tools are not module-level functions"
+
+    checked, skipped = 0, []
+    with patch("qgis_mcp.server._send_sync", fake_send_sync):
+        for fn in tool_fns:
+            sig = inspect.signature(fn)
+            if "instance" not in sig.parameters:
+                skipped.append(fn.__name__)
+                continue
+            kwargs = {
+                name: dummy(p.annotation)
+                for name, p in sig.parameters.items()
+                if name not in ("ctx", "instance") and p.default is inspect.Parameter.empty
+            }
+            seen.clear()
+            with contextlib.suppress(Exception):
+                # Some tools post-process the (empty) stub result and raise; the
+                # forwarding has already been recorded by then.
+                await fn(_make_ctx(), instance="probe", **kwargs)
+            assert seen, f"{fn.__name__} never reached _send_sync"
+            assert all(i == "probe" for _, i in seen), f"{fn.__name__} dropped instance: {seen}"
+            checked += 1
+
+    assert checked >= 100, f"only {checked} tools exercised"
+    assert skipped == ["list_qgis_instances"], f"tools missing an instance parameter: {skipped}"
+
+
+@pytest.mark.asyncio
+async def test_list_qgis_instances_reports_configuration_and_reachability():
+    from qgis_mcp.server import list_qgis_instances
+
+    with (
+        patch.dict(os.environ, {"QGIS_MCP_INSTANCES": "a=9876,b=lab:9877"}, clear=True),
+        patch("qgis_mcp.server._probe_instance", side_effect=[True, False]),
+        # Reachable instances are also asked who they are; stub it so this stays a
+        # test of the configuration report and does no socket I/O.
+        patch("qgis_mcp.server._instance_identity", AsyncMock(return_value={})),
+    ):
+        result = await list_qgis_instances(_make_ctx())
+
+    assert result == {
+        "instances": [
+            {"name": "a", "host": "localhost", "port": 9876, "reachable": True},
+            {"name": "b", "host": "lab", "port": 9877, "reachable": False},
+        ],
+        # No entry is named 'default', so instance-less calls land on 'a' —
+        # reporting the constant "default" here would misdirect every caller
+        # that reads this field to find out where its calls go.
+        "implicit_instance": "a",
+        "count": 2,
+    }
+
+
+@pytest.mark.asyncio
+async def test_list_instances_reports_default_when_one_is_named_default():
+    """With an explicit 'default' entry, that is what instance-less calls use."""
+    from qgis_mcp.server import list_qgis_instances
+
+    with (
+        patch.dict(os.environ, {"QGIS_MCP_INSTANCES": "a=9876,default=9877"}, clear=True),
+        patch("qgis_mcp.server._probe_instance", side_effect=[True, True]),
+        patch("qgis_mcp.server._instance_identity", AsyncMock(return_value={})),
+    ):
+        result = await list_qgis_instances(_make_ctx())
+
+    assert result["implicit_instance"] == "default"
+
+
+def test_probe_instance_reports_unreachable_port():
+    """An unused port probes False (and does not take the retry-loop path)."""
+    import socket as socket_mod
+
+    from qgis_mcp.server import _probe_instance
+
+    with socket_mod.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        free_port = sock.getsockname()[1]
+    assert _probe_instance("gone", "127.0.0.1", free_port, timeout=0.5) is False
+
+
+def test_probe_instance_reports_reachable_listener():
+    import socket as socket_mod
+
+    from qgis_mcp.server import _probe_instance
+
+    listener = socket_mod.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    try:
+        port = listener.getsockname()[1]
+        assert _probe_instance("live", "127.0.0.1", port, timeout=0.5) is True
+    finally:
+        listener.close()
+
+
+def _stub_plugin_server(label, stop):
+    """Minimal length-prefixed echo server standing in for the QGIS plugin.
+
+    Returns (port, received) — `received` collects the decoded commands so a
+    test can prove which socket a call actually reached.
+    """
+    import socket as socket_mod
+    import threading as threading_mod
+
+    received: list = []
+    listener = socket_mod.socket()
+    listener.setsockopt(socket_mod.SOL_SOCKET, socket_mod.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(5)
+    listener.settimeout(0.2)
+    port = listener.getsockname()[1]
+
+    def serve():
+        conns: list = []
+        try:
+            while not stop.is_set():
+                try:
+                    conn, _ = listener.accept()
+                except TimeoutError:
+                    continue
+                conns.append(conn)
+                threading_mod.Thread(target=handle, args=(conn,), daemon=True).start()
+        finally:
+            listener.close()
+            for conn in conns:
+                with contextlib.suppress(OSError):
+                    conn.close()
+
+    def handle(conn):
+        conn.settimeout(0.2)
+        while not stop.is_set():
+            try:
+                header = conn.recv(4)
+            except TimeoutError:
+                continue
+            except OSError:
+                return
+            if len(header) < 4:
+                return
+            size = HEADER_STRUCT.unpack(header)[0]
+            payload = b""
+            while len(payload) < size:
+                chunk = conn.recv(size - len(payload))
+                if not chunk:
+                    return
+                payload += chunk
+            command = json.loads(payload.decode("utf-8"))
+            received.append(command)
+            body = json.dumps(
+                {"status": "success", "result": {"served_by": label, "type": command["type"]}}
+            ).encode("utf-8")
+            conn.sendall(HEADER_STRUCT.pack(len(body)) + body)
+
+    threading.Thread(target=serve, daemon=True).start()
+    return port, received
+
+
+def test_two_instances_route_over_their_own_sockets():
+    """End-to-end over real sockets: each instance reaches only its own server.
+
+    Mocked-client tests cannot show that the pool actually opens two distinct
+    TCP connections and sends each command to the right one.
+    """
+    import qgis_mcp.server as srv
+
+    stop = threading.Event()
+    port_a, received_a = _stub_plugin_server("alpha", stop)
+    port_b, received_b = _stub_plugin_server("beta", stop)
+
+    srv._qgis_connections.clear()
+    srv._connection_validated_at.clear()
+    try:
+        with patch.dict(
+            os.environ,
+            {"QGIS_MCP_INSTANCES": f"default=127.0.0.1:{port_a},b=127.0.0.1:{port_b}"},
+            clear=True,
+        ):
+            assert _send_sync("ping") == {"served_by": "alpha", "type": "ping"}
+            assert _send_sync("get_layers", instance="b") == {
+                "served_by": "beta",
+                "type": "get_layers",
+            }
+            # Both connections stay pooled and independent.
+            assert set(srv._qgis_connections) == {"default", "b"}
+            assert srv._qgis_connections["default"] is not srv._qgis_connections["b"]
+            assert srv._qgis_connections["default"].port == port_a
+            assert srv._qgis_connections["b"].port == port_b
+            # A second call reuses the same socket rather than reconnecting.
+            assert _send_sync("ping", instance="b") == {"served_by": "beta", "type": "ping"}
+
+        assert [c["type"] for c in received_a] == ["ping"]
+        assert [c["type"] for c in received_b] == ["get_layers", "ping"]
+    finally:
+        for name in list(srv._qgis_connections):
+            srv._invalidate_connection(name)
+        srv._first_connected.difference_update({"default", "b"})
+        stop.set()
+
+
+# --- Edit sessions, geometry writes, raster style, DB connections ---
+
+
+@pytest.mark.asyncio
+async def test_edit_session_lifecycle(mock_connection):
+    """start/commit go straight through; rollback is confirmation-gated."""
+    from qgis_mcp.server import commit_edits, rollback_edits, start_editing
+
+    mock_connection.send_command.return_value = {"status": "success", "result": {"ok": True}}
+    ctx = _make_ctx()
+    assert await start_editing(ctx, layer_id="lyr") == {"ok": True}
+    assert await commit_edits(ctx, layer_id="lyr") == {"ok": True}
+    assert await rollback_edits(ctx, layer_id="lyr") == {"ok": True}
+    assert [c[0][0] for c in mock_connection.send_command.call_args_list] == [
+        "start_editing",
+        "commit_edits",
+        "rollback_edits",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_rollback_edits_declined(mock_connection):
+    """A declined rollback must never reach the plugin — the buffer is unrecoverable."""
+    from qgis_mcp.server import rollback_edits
+
+    output = await rollback_edits(_make_ctx(elicitation="decline"), layer_id="lyr")
+    assert output == {"ok": False, "message": "Cancelled by user"}
+    mock_connection.send_command.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_undo_redo_edits(mock_connection):
+    from qgis_mcp.server import redo_edits, undo_edits
+
+    mock_connection.send_command.return_value = {"status": "success", "result": {"undone": 2}}
+    await undo_edits(_make_ctx(), layer_id="lyr", steps=2)
+    mock_connection.send_command.assert_called_with(
+        "undo_edits", {"layer_id": "lyr", "steps": 2}, timeout=30
+    )
+    await redo_edits(_make_ctx(), layer_id="lyr")
+    mock_connection.send_command.assert_called_with(
+        "redo_edits", {"layer_id": "lyr", "steps": 1}, timeout=30
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_feature_geometry_tool(mock_connection):
+    from qgis_mcp.server import update_feature_geometry
+
+    mock_connection.send_command.return_value = {"status": "success", "result": {"updated": 1}}
+    output = await update_feature_geometry(
+        _make_ctx(), layer_id="lyr", updates=[{"fid": 1, "geometry_wkt": "POINT(1 2)"}]
+    )
+    assert output == {"updated": 1}
+    mock_connection.send_command.assert_called_once_with(
+        "update_feature_geometry",
+        {"layer_id": "lyr", "updates": [{"fid": 1, "geometry_wkt": "POINT(1 2)"}]},
+        timeout=30,
+    )
+
+
+@pytest.mark.asyncio
+async def test_set_raster_style_defaults(mock_connection):
+    from qgis_mcp.server import set_raster_style
+
+    mock_connection.send_command.return_value = {"status": "success", "result": {"ok": True}}
+    await set_raster_style(_make_ctx(), layer_id="dem", style_type="singleband_pseudocolor")
+    params = mock_connection.send_command.call_args[0][1]
+    assert params["style_type"] == "singleband_pseudocolor"
+    assert params["band"] == 1
+    assert params["color_ramp"] == "Viridis"
+    # Unset bounds must stay None so the plugin falls back to band statistics.
+    assert params["min_value"] is None and params["max_value"] is None
+
+
+@pytest.mark.asyncio
+async def test_list_connections_filters_by_provider(mock_connection):
+    from qgis_mcp.server import list_connections
+
+    mock_connection.send_command.return_value = {
+        "status": "success",
+        "result": {"connections": [{"provider": "postgres", "name": "gis"}], "count": 1},
+    }
+    output = await list_connections(_make_ctx(), provider="postgres")
+    assert output["count"] == 1
+    mock_connection.send_command.assert_called_once_with(
+        "list_connections", {"provider": "postgres"}, timeout=30
+    )
+
+
+@pytest.mark.asyncio
+async def test_add_layer_from_connection_returns_resource_link(mock_connection):
+    from qgis_mcp.server import add_layer_from_connection
+
+    mock_connection.send_command.return_value = {
+        "status": "success",
+        "result": {"id": "abc", "name": "roads", "type": "vector"},
+    }
+    output = await add_layer_from_connection(
+        _make_ctx(), provider="postgres", connection="gis", table="roads", schema="public"
+    )
+    assert json.loads(output[0].text)["id"] == "abc"
+    assert str(output[1].uri) == "qgis://layers/abc/info"
+
+
+@pytest.mark.asyncio
+async def test_execute_connection_sql_requires_confirmation(mock_connection):
+    """Server-side SQL can drop tables — a declined prompt must not send it."""
+    from qgis_mcp.server import execute_connection_sql
+
+    output = await execute_connection_sql(
+        _make_ctx(elicitation="decline"),
+        provider="postgres",
+        connection="gis",
+        sql="DELETE FROM roads",
+    )
+    assert output == {"ok": False, "message": "Cancelled by user"}
+    mock_connection.send_command.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_import_layer_to_connection_confirms_only_on_overwrite(mock_connection):
+    from qgis_mcp.server import import_layer_to_connection
+
+    mock_connection.send_command.return_value = {"status": "success", "result": {"ok": True}}
+    # No overwrite: nothing is destroyed, so no prompt is raised.
+    ctx = _make_ctx(elicitation="decline")
+    assert await import_layer_to_connection(
+        ctx, layer_id="lyr", provider="ogr", connection="db", table="t"
+    ) == {"ok": True}
+    ctx.elicit.assert_not_called()
+    # Overwrite replaces an existing table, so a decline must block the call.
+    mock_connection.send_command.reset_mock()
+    assert await import_layer_to_connection(
+        ctx, layer_id="lyr", provider="ogr", connection="db", table="t", overwrite=True
+    ) == {"ok": False, "message": "Cancelled by user"}
+    mock_connection.send_command.assert_not_called()
+
+
+def test_confirmation_gated_commands_blocked_in_batch():
+    """Batch must not be a way to skip the elicitation on the new destructive commands."""
+    from qgis_mcp.helpers import BATCH_BLOCKED_COMMANDS
+
+    assert {
+        "rollback_edits",
+        "execute_connection_sql",
+        "import_layer_to_connection",
+    } <= BATCH_BLOCKED_COMMANDS

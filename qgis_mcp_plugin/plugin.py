@@ -1,5 +1,6 @@
 import base64
 import contextlib
+import errno
 import fnmatch
 import io
 import json
@@ -27,9 +28,12 @@ except ImportError:
 
 from qgis.core import (
     Qgis,
+    QgsAbstractDatabaseProviderConnection,
     QgsApplication,
     QgsCategorizedSymbolRenderer,
     QgsClassificationEqualInterval,
+    QgsColorRampShader,
+    QgsContrastEnhancement,
     QgsCoordinateReferenceSystem,
     QgsCoordinateTransform,
     QgsDataSourceUri,
@@ -41,6 +45,7 @@ from qgis.core import (
     QgsField,
     QgsGeometry,
     QgsGraduatedSymbolRenderer,
+    QgsHillshadeRenderer,
     QgsLayerTreeGroup,
     QgsLayerTreeLayer,
     QgsLayoutExporter,
@@ -50,6 +55,7 @@ from qgis.core import (
     QgsMapRendererParallelJob,
     QgsMapSettings,
     QgsMessageLog,
+    QgsMultiBandColorRenderer,
     QgsPointXY,
     QgsPrintLayout,
     QgsProcessingModelAlgorithm,
@@ -72,14 +78,19 @@ from qgis.core import (
     QgsProcessingParameterString,
     QgsProcessingParameterVectorLayer,
     QgsProject,
+    QgsProviderRegistry,
     QgsRasterLayer,
+    QgsRasterShader,
     QgsRectangle,
     QgsRendererCategory,
     QgsSettings,
+    QgsSingleBandGrayRenderer,
+    QgsSingleBandPseudoColorRenderer,
     QgsSingleSymbolRenderer,
     QgsStyle,
     QgsSymbol,
     QgsVectorLayer,
+    QgsVectorLayerExporter,
     QgsVectorLayerJoinInfo,
     QgsVectorSimplifyMethod,
     QgsWkbTypes,
@@ -125,8 +136,22 @@ from .compat import (
     AGG_STDEV,
     AGG_SUM,
     ALIGN_CENTER,
+    CONN_CAP_EXECUTE_SQL,
+    CONN_CAP_SCHEMAS,
+    CONN_CAP_SQL_LAYERS,
+    CONN_TABLE_ASPATIAL,
+    CONN_TABLE_RASTER,
+    CONN_TABLE_VECTOR,
+    CONN_TABLE_VIEW,
+    CONTRAST_CLIP_MINMAX,
+    CONTRAST_NONE,
+    CONTRAST_STRETCH_CLIP_MINMAX,
+    CONTRAST_STRETCH_MINMAX,
+    EXPORT_SUCCESS,
     GEOM_LINE,
     GEOM_POLYGON,
+    GRAY_BLACK_TO_WHITE,
+    GRAY_WHITE_TO_BLACK,
     IODEVICE_WRITEONLY,
     LAYER_RASTER,
     LAYER_VECTOR,
@@ -148,6 +173,12 @@ from .compat import (
     QVAR_INT,
     QVAR_STRING,
     RASTER_STATS_ALL,
+    SHADER_CLASS_CONTINUOUS,
+    SHADER_CLASS_EQUAL_INTERVAL,
+    SHADER_CLASS_QUANTILE,
+    SHADER_DISCRETE,
+    SHADER_EXACT,
+    SHADER_INTERPOLATED,
     SIMPLIFY_ANTIALIAS,
     SIMPLIFY_GEOMETRY,
     TOOLBUTTON_ICON_ONLY,
@@ -157,6 +188,12 @@ from .compat import (
 
 _DEFAULT_HOST = "localhost"
 _DEFAULT_PORT = 9876
+# "someone else already holds this port". EADDRINUSE is the usual answer, and is
+# what a second QGIS window gets since both sides set SO_EXCLUSIVEADDRUSE. Windows
+# answers WSAEACCES instead when the other holder used plain SO_REUSEADDR, which
+# means the same thing here — the spin box floor is 1024, so EACCES cannot be the
+# "privileged port" case.
+_ADDR_IN_USE = frozenset({errno.EADDRINUSE, errno.EACCES, 10048, 10013})
 _RECV_CHUNK_SIZE = 65536
 _MAX_MESSAGE_SIZE = 10 * 1024 * 1024  # 10 MB
 _HEADER_STRUCT = struct.Struct(">I")
@@ -195,6 +232,7 @@ class QgisMCPServer(QObject):
         self.clients: dict[socket.socket, bytes] = {}
         self.timer = None
         self._message_log = deque(maxlen=1000)
+        self.start_error = None  # why start() failed, for the UI to report
 
     def _notify_clients_changed(self):
         """Report the active client count to the UI (badge on the toolbar icon)."""
@@ -205,8 +243,20 @@ class QgisMCPServer(QObject):
     def start(self):
         """Start the server"""
         self.running = True
+        self.start_error = None
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        # SO_REUSEADDR does not mean the same thing on both platforms. On Windows
+        # it lets a second socket bind a port another socket already holds, so two
+        # QGIS windows on one user profile (which share the saved port in
+        # QgsSettings) would BOTH report "server started" on 9876 and one of them
+        # would silently swallow every connection — the wrong window answering with
+        # no error anywhere. SO_EXCLUSIVEADDRUSE is the Windows way to ask for what
+        # SO_REUSEADDR already gives us on Unix, and it still allows an immediate
+        # rebind after stop, which is why SO_REUSEADDR was here to begin with.
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):  # Windows only
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        else:
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
         try:
             self.socket.bind((self.host, self.port))
@@ -235,6 +285,12 @@ class QgisMCPServer(QObject):
             )
             return True
         except Exception as e:
+            self.start_error = str(e)
+            if isinstance(e, OSError) and e.errno in _ADDR_IN_USE:
+                self.start_error = (
+                    f"Port {self.port} is already in use — another QGIS window or program "
+                    "is on it. Pick a different port for this window."
+                )
             QgsMessageLog.logMessage(f"Failed to start server: {e!s}", self.LOG_TAG, MSG_CRITICAL)
             self.stop()
             return False
@@ -497,6 +553,22 @@ class QgisMCPServer(QObject):
                 "set_layer_order": self.set_layer_order,
                 # Phase 9 — 3D
                 "get_3d_screenshot": self.get_3d_screenshot,
+                # Phase 10 — database connections
+                "list_connections": self.list_connections,
+                "list_connection_tables": self.list_connection_tables,
+                "add_layer_from_connection": self.add_layer_from_connection,
+                "import_layer_to_connection": self.import_layer_to_connection,
+                "execute_connection_sql": self.execute_connection_sql,
+                # Phase 10 — edit sessions & geometry writes
+                "start_editing": self.start_editing,
+                "commit_edits": self.commit_edits,
+                "rollback_edits": self.rollback_edits,
+                "get_edit_status": self.get_edit_status,
+                "undo_edits": self.undo_edits,
+                "redo_edits": self.redo_edits,
+                "update_feature_geometry": self.update_feature_geometry,
+                # Phase 10 — raster symbology
+                "set_raster_style": self.set_raster_style,
             }
 
             handler = handlers.get(cmd_type)
@@ -591,11 +663,20 @@ class QgisMCPServer(QObject):
         return {"status": overall, "checks": checks}
 
     def get_qgis_info(self, **kwargs):
-        return {
+        info = {
             "qgis_version": Qgis.version(),
             "profile_folder": QgsApplication.qgisSettingsDirPath(),
             "plugins_count": len(active_plugins),
+            # Identity, so a client driving several QGIS windows can tell which one
+            # answered rather than inferring it from the port. The pid is unique and
+            # stable; the window title is what the user reads in the taskbar and
+            # already carries the project name.
+            "pid": os.getpid(),
         }
+        if self.iface is not None:
+            with contextlib.suppress(Exception):
+                info["window_title"] = self.iface.mainWindow().windowTitle()
+        return info
 
     def get_project_info(self, **kwargs):
         project = QgsProject.instance()
@@ -614,13 +695,21 @@ class QgisMCPServer(QObject):
                 "id": layer.id(),
                 "name": layer.name(),
                 "type": self._get_layer_type(layer),
-                "visible": (
-                    layer.isValid() and project.layerTreeRoot().findLayer(layer.id()).isVisible()
-                ),
+                "visible": layer.isValid() and self._is_visible(project, layer.id()),
             }
             info["layers"].append(layer_info)
 
         return info
+
+    def _is_visible(self, project, layer_id):
+        """Visibility of a layer in the layer tree.
+
+        Non-spatial tables (attribute-only tables, e.g. GeoPackage tables used by QGIS relations)
+        live in the project but have no node in the layer tree, so findLayer() returns None.
+        Treat them as not visible instead of raising AttributeError.
+        """
+        node = project.layerTreeRoot().findLayer(layer_id)
+        return node.isVisible() if node is not None else False
 
     def _get_layer_type(self, layer):
         if layer.type() == LAYER_VECTOR:
@@ -747,7 +836,7 @@ class QgisMCPServer(QObject):
                 "id": layer_id,
                 "name": layer.name(),
                 "type": self._get_layer_type(layer),
-                "visible": project.layerTreeRoot().findLayer(layer_id).isVisible(),
+                "visible": self._is_visible(project, layer_id),
             }
 
             if layer.type() == LAYER_VECTOR:
@@ -1222,11 +1311,19 @@ class QgisMCPServer(QObject):
                 f.setGeometry(geom)
             qgs_features.append(f)
 
-        ok, added = dp.addFeatures(qgs_features)
-        if not ok:
-            raise Exception("Failed to add features")
+        # An open edit session owns the layer: writing straight to the provider
+        # would land underneath the buffer and be lost on rollback.
+        if layer.isEditable():
+            if not layer.addFeatures(qgs_features):
+                raise Exception("Failed to add features to the edit buffer")
+            count = len(qgs_features)
+        else:
+            ok, added = dp.addFeatures(qgs_features)
+            if not ok:
+                raise Exception("Failed to add features")
+            count = len(added)
         layer.updateExtents()
-        return {"added": len(added)}
+        return {"added": count, "buffered": layer.isEditable()}
 
     def update_features(self, layer_id, updates, **kwargs):
         layer = self._get_vector_layer(layer_id)
@@ -1257,10 +1354,14 @@ class QgisMCPServer(QObject):
                 attr_map[fid] = field_map
 
         if attr_map:
-            ok = dp.changeAttributeValues(attr_map)
-            if not ok:
+            if layer.isEditable():
+                for fid, field_map in attr_map.items():
+                    for idx, value in field_map.items():
+                        if not layer.changeAttributeValue(fid, idx, value):
+                            raise Exception(f"Failed to update fid {fid} in the edit buffer")
+            elif not dp.changeAttributeValues(attr_map):
                 raise Exception("Failed to update features")
-        return {"updated": len(attr_map)}
+        return {"updated": len(attr_map), "buffered": layer.isEditable()}
 
     def delete_features(self, layer_id, fids=None, expression=None, **kwargs):
         layer = self._get_vector_layer(layer_id)
@@ -1275,11 +1376,126 @@ class QgisMCPServer(QObject):
         else:
             raise Exception("Either fids or expression must be provided")
 
-        ok = dp.deleteFeatures(target_fids)
+        if layer.isEditable():
+            ok = layer.deleteFeatures(target_fids)
+        else:
+            ok = dp.deleteFeatures(target_fids)
         if not ok:
             raise Exception("Failed to delete features")
         layer.updateExtents()
-        return {"deleted": len(target_fids)}
+        return {"deleted": len(target_fids), "buffered": layer.isEditable()}
+
+    # --- Edit sessions -----------------------------------------------------
+
+    def start_editing(self, layer_id, **kwargs):
+        layer = self._get_vector_layer(layer_id)
+        if layer.isEditable():
+            return {"ok": True, "editing": True, "already_editing": True}
+        if not layer.startEditing():
+            raise Exception(f"Failed to start editing '{layer.name()}' (read-only provider?)")
+        return {"ok": True, "editing": True, "already_editing": False}
+
+    def commit_edits(self, layer_id, **kwargs):
+        layer = self._get_vector_layer(layer_id)
+        if not layer.isEditable():
+            raise Exception(f"Layer '{layer.name()}' is not in edit mode")
+        if not layer.commitChanges():
+            errors = "; ".join(layer.commitErrors())
+            raise Exception(f"Commit failed: {errors}")
+        layer.triggerRepaint()
+        return {"ok": True, "editing": layer.isEditable()}
+
+    def rollback_edits(self, layer_id, **kwargs):
+        layer = self._get_vector_layer(layer_id)
+        if not layer.isEditable():
+            raise Exception(f"Layer '{layer.name()}' is not in edit mode")
+        if not layer.rollBack():
+            raise Exception(f"Rollback failed for '{layer.name()}'")
+        layer.triggerRepaint()
+        return {"ok": True, "editing": layer.isEditable()}
+
+    def get_edit_status(self, layer_id, **kwargs):
+        layer = self._get_vector_layer(layer_id)
+        stack = layer.undoStack()
+        status = {
+            "layer_id": layer.id(),
+            "name": layer.name(),
+            "editable": layer.isEditable(),
+            "modified": layer.isModified(),
+            "can_undo": stack.canUndo(),
+            "can_redo": stack.canRedo(),
+            "undo_steps": stack.index(),
+        }
+        buf = layer.editBuffer()
+        if buf is not None:
+            status["pending"] = {
+                "added": len(buf.addedFeatures()),
+                "deleted": len(buf.deletedFeatureIds()),
+                "changed_attributes": len(buf.changedAttributeValues()),
+                "changed_geometries": len(buf.changedGeometries()),
+            }
+        return status
+
+    def _step_undo_stack(self, layer_id, steps, redo):
+        layer = self._get_vector_layer(layer_id)
+        stack = layer.undoStack()
+        steps = max(1, int(steps))
+        done = 0
+        for _ in range(steps):
+            if redo:
+                if not stack.canRedo():
+                    break
+                stack.redo()
+            else:
+                if not stack.canUndo():
+                    break
+                stack.undo()
+            done += 1
+        layer.triggerRepaint()
+        return {
+            "redone" if redo else "undone": done,
+            "requested": steps,
+            "can_undo": stack.canUndo(),
+            "can_redo": stack.canRedo(),
+        }
+
+    def undo_edits(self, layer_id, steps=1, **kwargs):
+        return self._step_undo_stack(layer_id, steps, redo=False)
+
+    def redo_edits(self, layer_id, steps=1, **kwargs):
+        return self._step_undo_stack(layer_id, steps, redo=True)
+
+    def update_feature_geometry(self, layer_id, updates, **kwargs):
+        layer = self._get_vector_layer(layer_id)
+        geom_map = {}
+        for i, upd in enumerate(updates):
+            unknown = sorted(set(upd) - {"fid", "geometry_wkt"})
+            if unknown:
+                raise Exception(
+                    f"Update {i}: unknown key(s) {unknown} - expected 'fid' and 'geometry_wkt'"
+                )
+            if "fid" not in upd:
+                raise Exception(f"Update {i}: missing 'fid'")
+            if "geometry_wkt" not in upd:
+                raise Exception(f"Update {i}: missing 'geometry_wkt'")
+            fid = upd["fid"]
+            if not layer.getFeature(fid).isValid():
+                raise Exception(f"Update {i}: no feature with fid {fid} in layer")
+            geom = QgsGeometry.fromWkt(upd["geometry_wkt"])
+            if geom.isNull():
+                raise Exception(f"Update {i}: invalid geometry_wkt: {upd['geometry_wkt']!r}")
+            geom_map[fid] = geom
+
+        if geom_map:
+            if layer.isEditable():
+                for fid, geom in geom_map.items():
+                    if not layer.changeGeometry(fid, geom):
+                        raise Exception(f"Failed to update geometry for fid {fid}")
+            elif not layer.dataProvider().changeGeometryValues(geom_map):
+                raise Exception("Failed to update geometries")
+            layer.updateExtents()
+            layer.triggerRepaint()
+        return {"updated": len(geom_map), "buffered": layer.isEditable()}
 
     def set_layer_style(
         self, layer_id, style_type, field=None, classes=5, color_ramp="Spectral", **kwargs
@@ -1344,6 +1560,168 @@ class QgisMCPServer(QObject):
         layer.triggerRepaint()
         self.iface.layerTreeView().refreshLayerSymbology(layer.id())
         return {"ok": True}
+
+    _SHADER_INTERPOLATION: ClassVar[dict] = {
+        "interpolated": SHADER_INTERPOLATED,
+        "discrete": SHADER_DISCRETE,
+        "exact": SHADER_EXACT,
+    }
+    _SHADER_CLASSIFICATION: ClassVar[dict] = {
+        "continuous": SHADER_CLASS_CONTINUOUS,
+        "equal_interval": SHADER_CLASS_EQUAL_INTERVAL,
+        "quantile": SHADER_CLASS_QUANTILE,
+    }
+    _CONTRAST_ALGORITHMS: ClassVar[dict] = {
+        "none": CONTRAST_NONE,
+        "stretch": CONTRAST_STRETCH_MINMAX,
+        "clip": CONTRAST_CLIP_MINMAX,
+        "stretch_clip": CONTRAST_STRETCH_CLIP_MINMAX,
+    }
+    _GRAY_GRADIENTS: ClassVar[dict] = {
+        "black_to_white": GRAY_BLACK_TO_WHITE,
+        "white_to_black": GRAY_WHITE_TO_BLACK,
+    }
+
+    def _get_raster_layer(self, layer_id):
+        """Helper: get a raster layer or raise."""
+        project = QgsProject.instance()
+        if layer_id not in project.mapLayers():
+            raise Exception(f"Layer not found: {layer_id}")
+        layer = project.mapLayer(layer_id)
+        if layer.type() != LAYER_RASTER:
+            raise Exception(f"Not a raster layer: {layer_id}")
+        return layer
+
+    @staticmethod
+    def _pick(mapping, key, label):
+        try:
+            return mapping[key]
+        except KeyError:
+            raise Exception(
+                f"Unknown {label}: {key!r}. Use one of {sorted(mapping)}"
+            ) from None
+
+    def _band_range(self, provider, band, min_value, max_value):
+        """Resolve a band's min/max, falling back to its statistics."""
+        if min_value is not None and max_value is not None:
+            return float(min_value), float(max_value)
+        stats = provider.bandStatistics(band, RASTER_STATS_ALL)
+        lo = stats.minimumValue if min_value is None else float(min_value)
+        hi = stats.maximumValue if max_value is None else float(max_value)
+        return float(lo), float(hi)
+
+    def set_raster_style(
+        self,
+        layer_id,
+        style_type,
+        band=1,
+        color_ramp="Viridis",
+        classes=5,
+        min_value=None,
+        max_value=None,
+        classification="continuous",
+        interpolation="interpolated",
+        gradient="black_to_white",
+        contrast="stretch",
+        red_band=1,
+        green_band=2,
+        blue_band=3,
+        azimuth=315.0,
+        altitude=45.0,
+        z_factor=1.0,
+        **kwargs,
+    ):
+        layer = self._get_raster_layer(layer_id)
+        provider = layer.dataProvider()
+        band_count = provider.bandCount()
+
+        def check_band(b, name):
+            b = int(b)
+            if not 1 <= b <= band_count:
+                raise Exception(f"{name}={b} out of range (layer has {band_count} band(s))")
+            return b
+
+        applied = {"style_type": style_type}
+
+        if style_type == "singleband_pseudocolor":
+            band = check_band(band, "band")
+            lo, hi = self._band_range(provider, band, min_value, max_value)
+            ramp = QgsStyle.defaultStyle().colorRamp(color_ramp)
+            if not ramp:
+                ramp = QgsStyle.defaultStyle().colorRamp("Viridis")
+            shader_fn = QgsColorRampShader(
+                lo,
+                hi,
+                ramp,
+                self._pick(self._SHADER_INTERPOLATION, interpolation, "interpolation"),
+                self._pick(self._SHADER_CLASSIFICATION, classification, "classification"),
+            )
+            shader_fn.classifyColorRamp(int(classes), band, QgsRectangle(), provider)
+            shader = QgsRasterShader()
+            shader.setRasterShaderFunction(shader_fn)
+            renderer = QgsSingleBandPseudoColorRenderer(provider, band, shader)
+            applied.update(
+                band=band, min=lo, max=hi, color_ramp=color_ramp, classes=int(classes)
+            )
+
+        elif style_type == "singleband_gray":
+            band = check_band(band, "band")
+            lo, hi = self._band_range(provider, band, min_value, max_value)
+            renderer = QgsSingleBandGrayRenderer(provider, band)
+            renderer.setGradient(self._pick(self._GRAY_GRADIENTS, gradient, "gradient"))
+            enhancement = QgsContrastEnhancement(provider.dataType(band))
+            enhancement.setContrastEnhancementAlgorithm(
+                self._pick(self._CONTRAST_ALGORITHMS, contrast, "contrast")
+            )
+            enhancement.setMinimumValue(lo)
+            enhancement.setMaximumValue(hi)
+            renderer.setContrastEnhancement(enhancement)
+            applied.update(band=band, min=lo, max=hi, gradient=gradient, contrast=contrast)
+
+        elif style_type == "multiband_color":
+            bands = [
+                check_band(red_band, "red_band"),
+                check_band(green_band, "green_band"),
+                check_band(blue_band, "blue_band"),
+            ]
+            renderer = QgsMultiBandColorRenderer(provider, *bands)
+            setters = (
+                renderer.setRedContrastEnhancement,
+                renderer.setGreenContrastEnhancement,
+                renderer.setBlueContrastEnhancement,
+            )
+            ranges = []
+            for setter, b in zip(setters, bands, strict=True):
+                lo, hi = self._band_range(provider, b, min_value, max_value)
+                enhancement = QgsContrastEnhancement(provider.dataType(b))
+                enhancement.setContrastEnhancementAlgorithm(
+                    self._pick(self._CONTRAST_ALGORITHMS, contrast, "contrast")
+                )
+                enhancement.setMinimumValue(lo)
+                enhancement.setMaximumValue(hi)
+                setter(enhancement)
+                ranges.append({"band": b, "min": lo, "max": hi})
+            applied.update(bands=ranges, contrast=contrast)
+
+        elif style_type == "hillshade":
+            band = check_band(band, "band")
+            renderer = QgsHillshadeRenderer(provider, band, float(azimuth), float(altitude))
+            renderer.setZFactor(float(z_factor))
+            applied.update(
+                band=band, azimuth=float(azimuth), altitude=float(altitude),
+                z_factor=float(z_factor),
+            )
+
+        else:
+            raise Exception(
+                f"Unknown style_type: {style_type}. Use 'singleband_pseudocolor', "
+                "'singleband_gray', 'multiband_color', or 'hillshade'"
+            )
+
+        layer.setRenderer(renderer)
+        layer.triggerRepaint()
+        self.iface.layerTreeView().refreshLayerSymbology(layer.id())
+        return {"ok": True, "layer_id": layer.id(), "applied": applied}
 
     def select_features(self, layer_id, expression=None, fids=None, **kwargs):
         layer = self._get_vector_layer(layer_id)
@@ -3248,6 +3626,210 @@ class QgisMCPServer(QObject):
         return {"ok": True, "order": layer_ids}
 
     # ------------------------------------------------------------------
+    # Database provider connections (Data Source Manager / Browser)
+    # ------------------------------------------------------------------
+
+    # Connection URIs carry saved credentials; never hand those to a client.
+    _URI_SECRET_RE = re.compile(r"\b(password|pass|pwd)=('[^']*'|\"[^\"]*\"|\S*)", re.IGNORECASE)
+
+    _CONN_TABLE_FLAG_NAMES: ClassVar[tuple] = (
+        ("vector", CONN_TABLE_VECTOR),
+        ("raster", CONN_TABLE_RASTER),
+        ("view", CONN_TABLE_VIEW),
+        ("aspatial", CONN_TABLE_ASPATIAL),
+    )
+
+    @classmethod
+    def _redact_uri(cls, uri):
+        return cls._URI_SECRET_RE.sub(r"\1=***", uri or "")
+
+    def _connection(self, provider, connection):
+        """Look up a saved provider connection by name, or raise."""
+        metadata = QgsProviderRegistry.instance().providerMetadata(provider)
+        if metadata is None:
+            raise Exception(f"Unknown data provider: {provider!r}")
+        try:
+            connections = metadata.connections(False)
+        except Exception as e:
+            raise Exception(f"Provider {provider!r} has no saved-connection support: {e}") from e
+        if connection not in connections:
+            raise Exception(
+                f"No saved {provider!r} connection named {connection!r} "
+                f"(available: {sorted(connections)})"
+            )
+        return connections[connection]
+
+    def list_connections(self, provider=None, **kwargs):
+        """List saved data source connections (PostGIS, GeoPackage, ...)."""
+        registry = QgsProviderRegistry.instance()
+        providers = [provider] if provider else registry.providerList()
+        entries = []
+        for name in providers:
+            metadata = registry.providerMetadata(name)
+            if metadata is None:
+                if provider:
+                    raise Exception(f"Unknown data provider: {name!r}")
+                continue
+            try:
+                connections = metadata.connections(False)
+            except Exception:
+                connections = {}  # provider has no saved-connection support
+            for conn_name, conn in connections.items():
+                entry = {"provider": name, "name": conn_name}
+                with contextlib.suppress(Exception):
+                    entry["uri"] = self._redact_uri(conn.uri())
+                entries.append(entry)
+        return {"connections": entries, "count": len(entries)}
+
+    def list_connection_tables(self, provider, connection, schema=None, **kwargs):
+        """List schemas and tables reachable through a saved connection."""
+        conn = self._connection(provider, connection)
+        schemas = []
+        if conn.capabilities() & CONN_CAP_SCHEMAS:
+            with contextlib.suppress(Exception):
+                schemas = list(conn.schemas())
+        if schema is None and schemas:
+            return {
+                "provider": provider,
+                "connection": connection,
+                "schemas": schemas,
+                "message": "Pass schema= to list the tables of one of these schemas",
+            }
+
+        tables = []
+        for table in conn.tables(schema or ""):
+            flags = table.flags()
+            crs_list = []
+            with contextlib.suppress(Exception):
+                crs_list = [c.authid() for c in table.crsList() if c.authid()]
+            tables.append(
+                {
+                    "name": table.tableName(),
+                    "schema": table.schema() or None,
+                    "geometry_column": table.geometryColumn() or None,
+                    "primary_key": list(table.primaryKeyColumns()),
+                    "comment": table.comment() or None,
+                    "crs": crs_list,
+                    "kinds": [name for name, flag in self._CONN_TABLE_FLAG_NAMES if flags & flag],
+                }
+            )
+        return {
+            "provider": provider,
+            "connection": connection,
+            "schema": schema,
+            "schemas": schemas,
+            "tables": tables,
+            "count": len(tables),
+        }
+
+    def add_layer_from_connection(
+        self,
+        provider,
+        connection,
+        table=None,
+        schema=None,
+        sql=None,
+        geometry_column=None,
+        primary_key=None,
+        name=None,
+        **kwargs,
+    ):
+        """Load a connection table (or a SQL query against it) as a project layer."""
+        conn = self._connection(provider, connection)
+        if sql:
+            if not conn.capabilities() & CONN_CAP_SQL_LAYERS:
+                raise Exception(f"Provider {provider!r} cannot build layers from SQL queries")
+            options = QgsAbstractDatabaseProviderConnection.SqlVectorLayerOptions()
+            options.sql = sql
+            options.layerName = name or "query"
+            if geometry_column:
+                options.geometryColumn = geometry_column
+            if primary_key:
+                options.primaryKeyColumns = [primary_key]
+            layer = conn.createSqlVectorLayer(options)
+        elif table:
+            uri = conn.tableUri(schema or "", table)
+            layer = QgsVectorLayer(uri, name or table, conn.providerKey())
+        else:
+            raise Exception("Either table or sql must be provided")
+
+        if layer is None or not layer.isValid():
+            target = f"query {sql!r}" if sql else f"table {table!r}"
+            error = layer.dataProvider().error().summary() if layer else ""
+            raise Exception(f"Failed to load {target} from {connection!r}: {error}")
+
+        QgsProject.instance().addMapLayer(layer)
+        return {
+            "id": layer.id(),
+            "name": layer.name(),
+            "type": self._get_layer_type(layer),
+            "feature_count": layer.featureCount(),
+            "crs": layer.crs().authid(),
+        }
+
+    def import_layer_to_connection(
+        self, layer_id, provider, connection, table, schema=None, overwrite=False, **kwargs
+    ):
+        """Write a loaded vector layer into a database/GeoPackage connection."""
+        layer = self._get_vector_layer(layer_id)
+        conn = self._connection(provider, connection)
+        provider_key = conn.providerKey()
+
+        exists = False
+        with contextlib.suppress(Exception):
+            exists = conn.tableExists(schema or "", table)
+        if exists and not overwrite:
+            raise Exception(
+                f"Table {table!r} already exists in {connection!r}; "
+                "pass overwrite=true to replace it"
+            )
+
+        if provider_key == "ogr":
+            # GeoPackage-style connections: the URI is the container file and the
+            # table name rides in the options.
+            uri = conn.uri()
+            options = {"layerName": table, "update": True, "overwrite": bool(overwrite)}
+        else:
+            ds_uri = QgsDataSourceUri(conn.uri())
+            ds_uri.setDataSource(
+                schema or "",
+                table,
+                "geom" if layer.isSpatial() else "",
+            )
+            uri = ds_uri.uri(False)
+            options = {"overwrite": bool(overwrite)}
+
+        result, error = QgsVectorLayerExporter.exportLayer(
+            layer, uri, provider_key, layer.crs(), False, options
+        )
+        if result != EXPORT_SUCCESS:
+            raise Exception(f"Import failed ({result}): {error}")
+        return {
+            "ok": True,
+            "provider": provider,
+            "connection": connection,
+            "schema": schema,
+            "table": table,
+            "features": layer.featureCount(),
+        }
+
+    def execute_connection_sql(self, provider, connection, sql, limit=100, **kwargs):
+        """Run SQL directly on the database behind a saved connection."""
+        conn = self._connection(provider, connection)
+        if not conn.capabilities() & CONN_CAP_EXECUTE_SQL:
+            raise Exception(f"Provider {provider!r} cannot execute SQL")
+        rows = conn.executeSql(sql) or []
+        limit = int(limit)
+        truncated = limit >= 0 and len(rows) > limit
+        if truncated:
+            rows = rows[:limit]
+        return {
+            "rows": [[self._to_json_safe(v) for v in row] for row in rows],
+            "count": len(rows),
+            "truncated": truncated,
+        }
+
+    # ------------------------------------------------------------------
     # Processing framework (extended)
     # ------------------------------------------------------------------
 
@@ -3591,7 +4173,8 @@ def _client_config_registry(repo_dir):
         claude_cfg = home / ".config" / "Claude" / "claude_desktop_config.json"
 
     cursor_cfg = home / ".cursor" / "mcp.json"
-    windsurf_cfg = home / ".windsurf" / "mcp.json"
+    # Windsurf reads ~/.codeium/windsurf/mcp_config.json on every platform.
+    windsurf_cfg = home / ".codeium" / "windsurf" / "mcp_config.json"
     vscode_cfg = repo_dir / ".vscode" / "mcp.json"
 
     if sys.platform == "win32":
@@ -3608,6 +4191,13 @@ def _client_config_registry(repo_dir):
         else None
     )
 
+    # Clients sharing Claude Desktop's mcpServers + command/args schema.
+    kimi_cfg = Path(os.environ.get("KIMI_CODE_HOME", home / ".kimi-code")) / "mcp.json"
+    gemini_cfg = home / ".gemini" / "settings.json"
+    qwen_cfg = home / ".qwen" / "settings.json"
+    copilot_cfg = Path(os.environ.get("COPILOT_HOME", home / ".copilot")) / "mcp-config.json"
+    lmstudio_cfg = home / ".lmstudio" / "mcp.json"
+
     return {
         "claude-desktop": {"path": claude_cfg, "key": "mcpServers"},
         "cursor": {"path": cursor_cfg, "key": "mcpServers"},
@@ -3617,6 +4207,11 @@ def _client_config_registry(repo_dir):
         "opencode": {"path": opencode_cfg, "key": "mcp"},
         "claude-code": {"print_only": True},
         "hermes": {"print_only": True, "entry_format": "hermes", "hermes_cfg": hermes_cfg},
+        "kimi": {"path": kimi_cfg, "key": "mcpServers"},
+        "gemini": {"path": gemini_cfg, "key": "mcpServers"},
+        "qwen": {"path": qwen_cfg, "key": "mcpServers"},
+        "copilot-cli": {"path": copilot_cfg, "key": "mcpServers"},
+        "lmstudio": {"path": lmstudio_cfg, "key": "mcpServers"},
     }
 
 
@@ -3718,7 +4313,11 @@ class MCPConfiguratorDialog(QDialog):
         client_row.addWidget(QLabel("Client:"))
         self.client_combo = QComboBox()
         self.client_combo.addItems(
-            ["claude-code", "claude-desktop", "cursor", "hermes", "opencode", "vscode", "windsurf", "zed"]
+            [
+                "claude-code", "claude-desktop", "copilot-cli", "cursor", "gemini",
+                "hermes", "kimi", "lmstudio", "opencode", "qwen", "vscode",
+                "windsurf", "zed",
+            ]
         )
         self.client_combo.setMinimumWidth(180)
         self.client_combo.currentTextChanged.connect(self._on_client_changed)
@@ -4354,6 +4953,11 @@ class QgisMCPPlugin:
                 self.action.setToolTip(f"MCP server running on :{port} — click to stop")
                 self.port_spin.setEnabled(False)
             else:
+                # Without this the button just pops back out and the only trace is a
+                # line in the message log, so a port clash looks like nothing happened.
+                reason = self.server.start_error or "unknown error"
+                with contextlib.suppress(Exception):
+                    self.iface.messageBar().pushWarning("QGIS MCP", reason)
                 self.server = None
                 self.action.setChecked(False)
         else:

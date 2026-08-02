@@ -85,6 +85,40 @@ Or, if you have a local clone of this repository:
 
 ---
 
+## Config file locations per client
+
+These clients all use the generic `mcpServers` + `command`/`args` block above, so
+`python install.py --non-interactive --clients <name>` writes it for you (merging into the
+existing file and leaving a `.bak` beside it).
+
+| Client | `--clients` name | Config file | Root key |
+|---|---|---|---|
+| Claude Desktop | `claude-desktop` | `%APPDATA%\Claude\claude_desktop_config.json` (macOS: `~/Library/Application Support/Claude/`, Linux: `~/.config/Claude/`) | `mcpServers` |
+| Cursor | `cursor` | `~/.cursor/mcp.json` | `mcpServers` |
+| VS Code (project-local) | `vscode` | `<repo>/.vscode/mcp.json` | `mcpServers` |
+| Windsurf | `windsurf` | `~/.codeium/windsurf/mcp_config.json` | `mcpServers` |
+| Zed | `zed` | `~/.config/zed/settings.json` (Windows: `%APPDATA%\Zed\settings.json`) | `context_servers` |
+| Kimi Code CLI | `kimi` | `~/.kimi-code/mcp.json` (or `$KIMI_CODE_HOME/mcp.json`) | `mcpServers` |
+| Gemini CLI | `gemini` | `~/.gemini/settings.json` | `mcpServers` |
+| Qwen Code | `qwen` | `~/.qwen/settings.json` | `mcpServers` |
+| GitHub Copilot CLI | `copilot-cli` | `~/.copilot/mcp-config.json` (or `$COPILOT_HOME/mcp-config.json`) | `mcpServers` |
+| LM Studio | `lmstudio` | `~/.lmstudio/mcp.json` | `mcpServers` |
+| opencode | `opencode` | `~/.config/opencode/config.json` (Windows: `%APPDATA%\opencode\config.json`) | `mcp` (`{"type": "local", "command": [...]}`) |
+
+Claude Code (`claude-code`) and Codex CLI (`codex`) are configured through their own
+`mcp add` subcommands instead of a config file; Hermes needs manual steps (below).
+
+Notes:
+
+- Kimi also reads a project-level `.kimi-code/mcp.json` from the working directory, which
+  overrides the user-level file.
+- Gemini CLI and Qwen Code keep unrelated user settings in the same `settings.json`; the
+  installer merges rather than overwrites.
+- Gemini CLI / Qwen Code also ship `gemini mcp add` / `qwen mcp add` — writing the JSON works
+  even when those binaries are not on `PATH`.
+
+---
+
 ## Nous / Hermes-style agents
 
 The [Nous Research portal](https://portal.nousresearch.com/) and Hermes-based agents that
@@ -111,7 +145,7 @@ by asking the agent:
 List the available MCP tools for QGIS.
 ```
 
-You should see 103 tools (e.g. `ping`, `get_layers`, `render_map`, …).
+You should see 117 tools (e.g. `ping`, `get_layers`, `render_map`, …).
 
 ### Step 3 — Check the connection
 
@@ -210,11 +244,54 @@ to get the full bat-file content and YAML snippet pre-filled with your local pat
 |----------|---------|-------------|
 | `QGIS_MCP_HOST` | `localhost` | Host where the QGIS plugin socket listens |
 | `QGIS_MCP_PORT` | `9876` | Port for the QGIS plugin socket |
+| `QGIS_MCP_INSTANCES` | _(unset)_ | Address several QGIS windows from one server: `name=port` or `name=host:port`, comma-separated (e.g. `default=9876,b=9877`). Unset = one instance named `default` from `QGIS_MCP_HOST`/`QGIS_MCP_PORT`. See [Multiple QGIS instances](#multiple-qgis-instances). |
 | `QGIS_MCP_TOKEN` | _(unset)_ | Optional shared secret for socket auth |
 | `QGIS_MCP_TRANSPORT` | `stdio` | MCP transport: `stdio` or `streamable-http` |
 | `QGIS_MCP_LOG_FILE` | `~/.local/share/qgis-mcp/server.log` | Log file path (empty to disable) |
 | `QGIS_MCP_LOG_LEVEL` | `INFO` | File log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
-| `QGIS_MCP_TOOL_MODE` | `granular` | `granular` (103 tools) or `compound` (25 grouped tools) |
+| `QGIS_MCP_TOOL_MODE` | `granular` | `granular` (117 tools) or `compound` (27 grouped tools) |
+
+---
+
+## Multiple QGIS instances
+
+One MCP server registration can drive several running QGIS windows — no need to register
+the server once per port.  Start each QGIS with the plugin on its own port, then list them
+in `QGIS_MCP_INSTANCES`:
+
+```json
+{
+  "mcpServers": {
+    "qgis": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "https://github.com/nkarasiak/qgis-mcp/archive/refs/heads/main.zip",
+        "qgis-mcp-server"
+      ],
+      "env": {
+        "QGIS_MCP_INSTANCES": "default=9876,planning=9877,archive=lab-box:9878"
+      }
+    }
+  }
+}
+```
+
+- Every tool takes an optional `instance` argument: `get_layers(instance="planning")`.
+- `list_qgis_instances` reports the configured names, host, port, and whether each is
+  currently reachable.
+- An unknown name is rejected with the list of configured names.
+- Instance names match `[A-Za-z0-9_-]+`.  Entries without a host use `QGIS_MCP_HOST`
+  (default `localhost`).
+- Each instance keeps its own pooled socket and its own lock, so two instances can be
+  driven concurrently without blocking each other.
+- Omitting `instance` targets the entry named `default`; when no entry is called `default`,
+  the **first** entry listed is used, so `planning=9877,archive=9878` works without
+  renaming anything.
+- **Not supported with `QGIS_MCP_TOOL_MODE=compound`.**  Compound tools carry no `instance`
+  argument, so configuring more than one instance in compound mode refuses to start rather
+  than silently routing every call to one QGIS.
+- `QGIS_MCP_TOKEN` is shared by all instances — set the same secret in each QGIS.
 
 ---
 
@@ -254,8 +331,8 @@ If the agent cannot spawn subprocesses but can make HTTP requests, set
 
 ## Compound tool mode
 
-If your agent has a limited context window or struggles with 103 separate tool schemas,
-enable compound tool mode to reduce the tool count to 25 grouped tools (no loss of
+If your agent has a limited context window or struggles with 104 separate tool schemas,
+enable compound tool mode to reduce the tool count to 27 grouped tools (no loss of
 functionality — every granular command is reachable through an action):
 
 ```json

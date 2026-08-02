@@ -848,3 +848,153 @@ def test_run_model_defaults_destination_parameters(client, setup_test_data):
         "run_model", {"model": f"model:{model_name}", "parameters": {"src": setup_test_data}}
     )
     assert resp["status"] == "success", resp.get("message")
+
+
+# --- Edit sessions, geometry writes, raster style, connections ---
+
+
+def test_edit_session_buffers_then_rolls_back(client, setup_test_data):
+    """Writes made inside a session must be undoable and discardable."""
+    layer_id = setup_test_data
+    assert client.send_command("start_editing", {"layer_id": layer_id})["status"] == "success"
+    try:
+        added = client.send_command(
+            "add_features",
+            {"layer_id": layer_id, "features": [{"attributes": {"name": "buffered"}}]},
+        )
+        assert added["result"]["buffered"] is True
+
+        status = client.send_command("get_edit_status", {"layer_id": layer_id})["result"]
+        assert status["editable"] is True
+        assert status["pending"]["added"] == 1
+        assert status["can_undo"] is True
+
+        undone = client.send_command("undo_edits", {"layer_id": layer_id})["result"]
+        assert undone["undone"] == 1
+        assert undone["can_redo"] is True
+        redone = client.send_command("redo_edits", {"layer_id": layer_id})["result"]
+        assert redone["redone"] == 1
+    finally:
+        rolled = client.send_command("rollback_edits", {"layer_id": layer_id})
+        assert rolled["status"] == "success"
+    # The 5 fixture features survive; the buffered one does not.
+    feats = client.send_command("get_layer_features", {"layer_id": layer_id, "limit": 50})
+    assert len(feats["result"]["features"]) == 5
+
+
+def test_commit_edits_persists(client, setup_test_data):
+    layer_id = setup_test_data
+    client.send_command("start_editing", {"layer_id": layer_id})
+    client.send_command(
+        "add_features", {"layer_id": layer_id, "features": [{"attributes": {"name": "kept"}}]}
+    )
+    assert client.send_command("commit_edits", {"layer_id": layer_id})["status"] == "success"
+    try:
+        feats = client.send_command(
+            "get_layer_features", {"layer_id": layer_id, "expression": "\"name\" = 'kept'"}
+        )
+        assert len(feats["result"]["features"]) == 1
+        # Session is closed, so a second commit is an error rather than a no-op.
+        assert client.send_command("commit_edits", {"layer_id": layer_id})["status"] == "error"
+    finally:
+        client.send_command(
+            "delete_features", {"layer_id": layer_id, "expression": "\"name\" = 'kept'"}
+        )
+
+
+def test_update_feature_geometry_without_session(client, setup_test_data):
+    layer_id = setup_test_data
+    feats = client.send_command(
+        "get_layer_features", {"layer_id": layer_id, "limit": 1, "include_geometry": True}
+    )
+    fid = feats["result"]["features"][0]["_fid"]
+    resp = client.send_command(
+        "update_feature_geometry",
+        {"layer_id": layer_id, "updates": [{"fid": fid, "geometry_wkt": "POINT(7 8)"}]},
+    )
+    assert resp["result"] == {"updated": 1, "buffered": False}
+    moved = client.send_command(
+        "get_layer_features",
+        {"layer_id": layer_id, "expression": f"$id = {fid}", "include_geometry": True},
+    )
+    assert "7 8" in moved["result"]["features"][0]["_geometry"].replace("(", " ")
+
+    bad = client.send_command(
+        "update_feature_geometry",
+        {"layer_id": layer_id, "updates": [{"fid": fid, "geometry_wkt": "NOT WKT"}]},
+    )
+    assert bad["status"] == "error"
+
+
+def test_set_raster_style_rejects_vector_layer(client, setup_test_data):
+    resp = client.send_command(
+        "set_raster_style",
+        {"layer_id": setup_test_data, "style_type": "singleband_pseudocolor"},
+    )
+    assert resp["status"] == "error"
+    assert "Not a raster layer" in resp["message"]
+
+
+def test_set_raster_style_applies_each_renderer(client):
+    """Style a real single-band raster with every supported renderer."""
+    create = client.send_command(
+        "execute_code",
+        {
+            "code": """
+import os, tempfile
+from osgeo import gdal
+from qgis.core import QgsProject, QgsRasterLayer
+
+path = os.path.join(tempfile.mkdtemp(), "live_dem.tif")
+ds = gdal.GetDriverByName("GTiff").Create(path, 8, 8, 1, gdal.GDT_Float32)
+ds.SetGeoTransform((0, 1, 0, 8, 0, -1))
+ds.GetRasterBand(1).WriteArray(
+    __import__("numpy").arange(64, dtype="float32").reshape(8, 8))
+ds = None
+layer = QgsRasterLayer(path, "live_dem", "gdal")
+QgsProject.instance().addMapLayer(layer)
+print(layer.id())
+"""
+        },
+    )
+    assert create["status"] == "success", create.get("message")
+    layer_id = create["result"]["output"].strip().splitlines()[-1]
+    try:
+        for style_type, extra in (
+            ("singleband_pseudocolor", {"color_ramp": "Viridis", "classes": 4}),
+            ("singleband_gray", {"gradient": "white_to_black"}),
+            ("hillshade", {"azimuth": 300.0, "z_factor": 2.0}),
+        ):
+            resp = client.send_command(
+                "set_raster_style",
+                {"layer_id": layer_id, "style_type": style_type, **extra},
+            )
+            assert resp["status"] == "success", resp.get("message")
+            assert resp["result"]["applied"]["style_type"] == style_type
+
+        # Bounds default to the band statistics when not supplied.
+        applied = client.send_command(
+            "set_raster_style",
+            {"layer_id": layer_id, "style_type": "singleband_pseudocolor"},
+        )["result"]["applied"]
+        assert applied["min"] == 0.0 and applied["max"] == 63.0
+
+        bad = client.send_command(
+            "set_raster_style", {"layer_id": layer_id, "style_type": "rainbow"}
+        )
+        assert bad["status"] == "error" and "Unknown style_type" in bad["message"]
+    finally:
+        client.send_command("remove_layer", {"layer_id": layer_id})
+
+
+def test_list_connections_and_unknown_provider(client):
+    resp = client.send_command("list_connections")
+    assert resp["status"] == "success"
+    assert isinstance(resp["result"]["connections"], list)
+    # Saved connections are profile-specific, so only the shape is asserted;
+    # what must always hold is that credentials never come back.
+    assert not any("password=" in c.get("uri", "").lower() for c in resp["result"]["connections"])
+
+    bad = client.send_command("list_connections", {"provider": "nosuchprovider"})
+    assert bad["status"] == "error"
+    assert "Unknown data provider" in bad["message"]

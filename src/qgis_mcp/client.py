@@ -6,6 +6,7 @@ Uses length-prefixed framing: each message is preceded by a 4-byte
 big-endian unsigned int indicating the JSON payload size in bytes.
 """
 
+import contextlib
 import json
 import logging
 import socket
@@ -22,6 +23,12 @@ from qgis_mcp.protocol import (
 
 logger = logging.getLogger("QgisMCPClient")
 
+# Cap the TCP handshake. Without it connect() inherits the OS default, so a host
+# that routes but has nothing listening (easy to configure now that instances
+# carry their own host) stalls ~21s per attempt — times the retry schedule, that
+# is minutes for one tool call. A local refusal is immediate either way.
+_CONNECT_TIMEOUT = 3.0
+
 
 class QgisMCPClient:
     def __init__(self, host=DEFAULT_HOST, port=DEFAULT_PORT):
@@ -29,19 +36,33 @@ class QgisMCPClient:
         self.port = port
         self.socket = None
         self._current_timeout = None  # Track timeout to skip redundant syscalls
+        # Why the last connect() failed. Callers need the distinction: a refusal
+        # means nothing is listening and retrying cannot help, while a timeout
+        # may just be a slow host.
+        self.last_error = None
 
-    def connect(self):
+    def connect(self, timeout=_CONNECT_TIMEOUT):
         try:
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             # Disable Nagle's algorithm: send small packets immediately instead
             # of waiting up to 40ms to coalesce. Our request payloads are small
             # (typically <1KB) and we always want them sent without delay.
             self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            self.socket.settimeout(timeout)
             self.socket.connect((self.host, self.port))
+            self.socket.settimeout(None)  # back to blocking; send_command sets its own
             self._current_timeout = None
+            self.last_error = None
             return True
-        except Exception:
-            logger.exception("Error connecting to server")
+        except Exception as exc:
+            # Not logger.exception: a probe of a closed instance is routine, and a
+            # full traceback per retry per instance buries the actual failure.
+            logger.warning("Could not connect to %s:%s (%s)", self.host, self.port, exc)
+            self.last_error = exc
+            if self.socket is not None:
+                with contextlib.suppress(OSError):
+                    self.socket.close()
+                self.socket = None
             return False
 
     def disconnect(self):

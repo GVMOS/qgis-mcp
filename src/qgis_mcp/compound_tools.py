@@ -1,6 +1,6 @@
 """Compound tool registrations for QGIS MCP.
 
-When QGIS_MCP_TOOL_MODE=compound, these ~23 grouped tools replace the
+When QGIS_MCP_TOOL_MODE=compound, these 27 grouped tools replace the
 granular tools, reducing context window overhead for LLMs with limited tool
 slots.
 
@@ -330,12 +330,14 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
         title="Features",
         description=(
             "Feature access and editing.\n"
-            "Actions: get, get_statistics, add, update, delete\n"
+            "Actions: get, get_statistics, add, update, update_geometry, delete\n"
             "- get: layer_id (str), limit (int, default 10, max 50), offset (int, default 0), "
             "expression (str, optional), include_geometry (bool, default false)\n"
             "- get_statistics: layer_id (str), field_name (str)\n"
             "- add: layer_id (str), features (list[dict]) — destructive\n"
             "- update: layer_id (str), updates (list[dict]) — destructive\n"
+            "- update_geometry: layer_id (str), updates (list[dict], "
+            "[{fid, geometry_wkt}]) — destructive\n"
             "- delete: layer_id (str), fids (list[int], optional), expression (str, optional) "
             "— destructive, requires confirmation"
             f"{_PARAMS_NOTE}"
@@ -376,6 +378,14 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
         elif action == "update":
             return await _send(
                 "update_features",
+                {
+                    "layer_id": kwargs["layer_id"],
+                    "updates": kwargs["updates"],
+                },
+            )
+        elif action == "update_geometry":
+            return await _send(
+                "update_feature_geometry",
                 {
                     "layer_id": kwargs["layer_id"],
                     "updates": kwargs["updates"],
@@ -434,6 +444,150 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
             raise ValueError(f"Unknown selection action: {action}")
 
     # ------------------------------------------------------------------
+    # 5b. editing
+    # ------------------------------------------------------------------
+
+    @mcp.tool(
+        title="Editing",
+        description=(
+            "Vector layer edit sessions. While a session is open, feature add/update/delete "
+            "goes to an undoable buffer instead of the data source.\n"
+            "Actions: start, commit, rollback, status, undo, redo\n"
+            "- start: layer_id (str)\n"
+            "- commit: layer_id (str) — writes the buffer to the data source\n"
+            "- rollback: layer_id (str) — discards it, requires confirmation\n"
+            "- status: layer_id (str)\n"
+            "- undo: layer_id (str), steps (int, default 1)\n"
+            "- redo: layer_id (str), steps (int, default 1)"
+            f"{_PARAMS_NOTE}"
+        ),
+        annotations=ToolAnnotations(destructiveHint=True),
+    )
+    async def editing(
+        ctx: Context, action: str, params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        kwargs = params or {}
+        layer_id = kwargs["layer_id"]
+        if action == "start":
+            return await _send("start_editing", {"layer_id": layer_id})
+        elif action == "commit":
+            await ctx.info(f"Committing edits on layer {layer_id}")
+            return await _send("commit_edits", {"layer_id": layer_id})
+        elif action == "rollback":
+            if not await _confirm_destructive(
+                ctx, f"Discard all uncommitted edits on layer {layer_id}? This cannot be undone."
+            ):
+                return {"ok": False, "message": "Cancelled by user"}
+            return await _send("rollback_edits", {"layer_id": layer_id})
+        elif action == "status":
+            return await _send("get_edit_status", {"layer_id": layer_id})
+        elif action == "undo":
+            return await _send(
+                "undo_edits", {"layer_id": layer_id, "steps": kwargs.get("steps", 1)}
+            )
+        elif action == "redo":
+            return await _send(
+                "redo_edits", {"layer_id": layer_id, "steps": kwargs.get("steps", 1)}
+            )
+        else:
+            raise ValueError(f"Unknown editing action: {action}")
+
+    # ------------------------------------------------------------------
+    # 5c. connection
+    # ------------------------------------------------------------------
+
+    @mcp.tool(
+        title="Connection",
+        description=(
+            "Saved data source connections (PostGIS, GeoPackage, SpatiaLite, MS SQL, ...) — "
+            "the QGIS Browser panel entries.\n"
+            "Actions: list, list_tables, add_layer, import_layer, execute_sql\n"
+            "- list: provider (str, optional filter, e.g. 'postgres', 'ogr')\n"
+            "- list_tables: provider (str), connection (str), schema (str, optional — omit on "
+            "schema-aware providers to get the schema list first)\n"
+            "- add_layer: provider (str), connection (str), table (str) + schema (str, optional), "
+            "OR sql (str) for a database-side query layer; geometry_column (str, optional), "
+            "primary_key (str, optional), name (str, optional)\n"
+            "- import_layer: layer_id (str), provider (str), connection (str), table (str), "
+            "schema (str, optional), overwrite (bool, default false) — destructive\n"
+            "- execute_sql: provider (str), connection (str), sql (str), limit (int, default 100, "
+            "-1 for all) — runs server-side, can modify the database, requires confirmation"
+            f"{_PARAMS_NOTE}"
+        ),
+        annotations=ToolAnnotations(destructiveHint=True),
+    )
+    async def connection(
+        ctx: Context, action: str, params: dict[str, Any] | None = None
+    ) -> dict[str, Any] | list:
+        kwargs = params or {}
+        if action == "list":
+            return await _send("list_connections", {"provider": kwargs.get("provider")})
+        elif action == "list_tables":
+            return await _send(
+                "list_connection_tables",
+                {
+                    "provider": kwargs["provider"],
+                    "connection": kwargs["connection"],
+                    "schema": kwargs.get("schema"),
+                },
+            )
+        elif action == "add_layer":
+            result = await _send(
+                "add_layer_from_connection",
+                {
+                    "provider": kwargs["provider"],
+                    "connection": kwargs["connection"],
+                    "table": kwargs.get("table"),
+                    "schema": kwargs.get("schema"),
+                    "sql": kwargs.get("sql"),
+                    "geometry_column": kwargs.get("geometry_column"),
+                    "primary_key": kwargs.get("primary_key"),
+                    "name": kwargs.get("name"),
+                },
+                timeout=TIMEOUT_LONG,
+            )
+            return make_layer_response(result)
+        elif action == "import_layer":
+            overwrite = kwargs.get("overwrite", False)
+            table = kwargs["table"]
+            if overwrite and not await _confirm_destructive(
+                ctx,
+                f"Overwrite table '{table}' in connection '{kwargs['connection']}'? "
+                "This cannot be undone.",
+            ):
+                return {"ok": False, "message": "Cancelled by user"}
+            return await _send(
+                "import_layer_to_connection",
+                {
+                    "layer_id": kwargs["layer_id"],
+                    "provider": kwargs["provider"],
+                    "connection": kwargs["connection"],
+                    "table": table,
+                    "schema": kwargs.get("schema"),
+                    "overwrite": overwrite,
+                },
+                timeout=TIMEOUT_LONG,
+            )
+        elif action == "execute_sql":
+            sql = kwargs["sql"]
+            if not await _confirm_destructive(
+                ctx, f"Run SQL on connection '{kwargs['connection']}'?\n\n{sql}"
+            ):
+                return {"ok": False, "message": "Cancelled by user"}
+            return await _send(
+                "execute_connection_sql",
+                {
+                    "provider": kwargs["provider"],
+                    "connection": kwargs["connection"],
+                    "sql": sql,
+                    "limit": kwargs.get("limit", 100),
+                },
+                timeout=TIMEOUT_LONG,
+            )
+        else:
+            raise ValueError(f"Unknown connection action: {action}")
+
+    # ------------------------------------------------------------------
     # 6. style
     # ------------------------------------------------------------------
 
@@ -441,10 +595,20 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
         title="Style",
         description=(
             "Layer symbology.\n"
-            "Actions: set\n"
+            "Actions: set, set_raster\n"
             "- set: layer_id (str), style_type (str: 'single', 'categorized', 'graduated'), "
             "field (str, optional — required for categorized/graduated), "
-            "classes (int, default 5), color_ramp (str, default 'Spectral')"
+            "classes (int, default 5), color_ramp (str, default 'Spectral')\n"
+            "- set_raster: layer_id (str), style_type (str: 'singleband_pseudocolor', "
+            "'singleband_gray', 'multiband_color', 'hillshade'), band (int, default 1), "
+            "color_ramp (str, default 'Viridis'), classes (int, default 5), "
+            "min_value/max_value (float, optional — default to band statistics), "
+            "classification (str: continuous|equal_interval|quantile), "
+            "interpolation (str: interpolated|discrete|exact), "
+            "gradient (str: black_to_white|white_to_black), "
+            "contrast (str: none|stretch|clip|stretch_clip), "
+            "red_band/green_band/blue_band (int, multiband_color), "
+            "azimuth/altitude/z_factor (float, hillshade)"
             f"{_PARAMS_NOTE}"
         ),
     )
@@ -462,6 +626,27 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
             if "field" in kwargs:
                 params["field"] = kwargs["field"]
             return await _send("set_layer_style", params)
+        elif action == "set_raster":
+            params = {
+                "layer_id": kwargs["layer_id"],
+                "style_type": kwargs["style_type"],
+                "band": kwargs.get("band", 1),
+                "color_ramp": kwargs.get("color_ramp", "Viridis"),
+                "classes": kwargs.get("classes", 5),
+                "min_value": kwargs.get("min_value"),
+                "max_value": kwargs.get("max_value"),
+                "classification": kwargs.get("classification", "continuous"),
+                "interpolation": kwargs.get("interpolation", "interpolated"),
+                "gradient": kwargs.get("gradient", "black_to_white"),
+                "contrast": kwargs.get("contrast", "stretch"),
+                "red_band": kwargs.get("red_band", 1),
+                "green_band": kwargs.get("green_band", 2),
+                "blue_band": kwargs.get("blue_band", 3),
+                "azimuth": kwargs.get("azimuth", 315.0),
+                "altitude": kwargs.get("altitude", 45.0),
+                "z_factor": kwargs.get("z_factor", 1.0),
+            }
+            return await _send("set_raster_style", params)
         else:
             raise ValueError(f"Unknown style action: {action}")
 

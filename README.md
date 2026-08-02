@@ -2,7 +2,7 @@
 
 Connect [QGIS](https://qgis.org/) to [Claude AI](https://claude.ai/) through the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/), enabling Claude to directly control QGIS — manage layers, edit features, run processing algorithms, render maps, and more.
 
-102 MCP tools covering layer management, feature editing, processing, rendering, styling, layout & atlas authoring, cross-layer SQL, plugin development, and system management. Compatible with QGIS 3.28–4.x. Works with Claude Code, Codex CLI, Gemini CLI, opencode, Claude Desktop, Cursor, VS Code, Windsurf, Zed, and more.
+117 MCP tools covering layer management, feature editing, processing, rendering, styling, layout & atlas authoring, cross-layer SQL, plugin development, and system management. Compatible with QGIS 3.28–4.x. Works with Claude Code, Codex CLI, Gemini CLI, Qwen Code, Kimi Code CLI, GitHub Copilot CLI, opencode, LM Studio, Claude Desktop, Cursor, VS Code, Windsurf, Zed, and more.
 
 ## Architecture
 
@@ -63,6 +63,81 @@ args = ["--from", "https://github.com/nkarasiak/qgis-mcp/archive/refs/heads/main
 <summary>Gemini CLI</summary>
 
 Add to `~/.gemini/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "qgis": {
+      "command": "uvx",
+      "args": ["--from", "https://github.com/nkarasiak/qgis-mcp/archive/refs/heads/main.zip", "qgis-mcp-server"]
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary>Qwen Code</summary>
+
+Same layout as Gemini CLI. Add to `~/.qwen/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "qgis": {
+      "command": "uvx",
+      "args": ["--from", "https://github.com/nkarasiak/qgis-mcp/archive/refs/heads/main.zip", "qgis-mcp-server"]
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary>Kimi Code CLI</summary>
+
+Add to `~/.kimi-code/mcp.json` (or `$KIMI_CODE_HOME/mcp.json`). A `.kimi-code/mcp.json`
+in the working directory overrides it for that project.
+
+```json
+{
+  "mcpServers": {
+    "qgis": {
+      "command": "uvx",
+      "args": ["--from", "https://github.com/nkarasiak/qgis-mcp/archive/refs/heads/main.zip", "qgis-mcp-server"]
+    }
+  }
+}
+```
+
+Kimi has no `mcp add` subcommand — edit the JSON or use the `/mcp-config` TUI.
+
+</details>
+
+<details>
+<summary>GitHub Copilot CLI</summary>
+
+Add to `~/.copilot/mcp-config.json` (directory overridable via `$COPILOT_HOME`):
+
+```json
+{
+  "mcpServers": {
+    "qgis": {
+      "command": "uvx",
+      "args": ["--from", "https://github.com/nkarasiak/qgis-mcp/archive/refs/heads/main.zip", "qgis-mcp-server"]
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary>LM Studio</summary>
+
+Add to `~/.lmstudio/mcp.json` (`%USERPROFILE%\.lmstudio\mcp.json` on Windows):
 
 ```json
 {
@@ -240,28 +315,33 @@ To auto-update instead, add `--refresh-package qgis-mcp` before `--from` in the 
 
 After updating the plugin, click **Stop / Start** in the QGIS MCP dock widget (or reload via `Plugins` > `QGIS MCP` > `Reload Plugin`) to load the new code without restarting QGIS.
 
-## Tools (102)
+## Tools (117)
 
 | Category | Tools |
 |----------|-------|
-| **Project** | `load_project`, `create_new_project`, `save_project`, `get_project_info` |
-| **Layers** | `get_layers`, `add_vector_layer`, `add_raster_layer`, `remove_layer`, `find_layer`, `create_memory_layer`, `set_layer_visibility`, `zoom_to_layer`, `get_layer_extent`, `set_layer_property` |
-| **Features** | `get_layer_features`, `add_features`, `update_features`, `delete_features`, `select_features`, `get_selection`, `clear_selection`, `get_field_statistics` |
-| **Styling** | `set_layer_style` (single, categorized, graduated) |
-| **Rendering** | `render_map`, `get_canvas_screenshot`, `get_canvas_extent`, `set_canvas_extent` |
-| **Processing** | `execute_processing`, `list_processing_algorithms`, `get_algorithm_help`, `create_processing_model` |
+| **Project** | `load_project`, `create_new_project`, `save_project`, `get_project_info`, `set_project_crs` |
+| **Layers** | `get_layers`, `add_vector_layer`, `add_raster_layer`, `add_web_layer`, `remove_layer`, `find_layer`, `create_memory_layer`, `set_layer_visibility`, `zoom_to_layer`, `get_layer_extent`, `set_layer_property`, `get_layer_crs`, `set_layer_crs`, `get_active_layer`, `set_active_layer`, `add_table_join`, `export_layer` |
+| **Features** | `get_layer_features`, `add_features`, `update_features`, `update_feature_geometry`, `delete_features`, `select_features`, `get_selection`, `clear_selection`, `get_field_statistics`, `get_unique_values` |
+| **Fields** | `add_field`, `delete_field`, `rename_field`, `field_calculator` |
+| **Editing** | `start_editing`, `commit_edits`, `rollback_edits`, `get_edit_status`, `undo_edits`, `redo_edits` |
+| **Styling** | `set_layer_style` (single, categorized, graduated), `set_raster_style` (pseudocolor, gray, RGB, hillshade), `apply_style_qml`, `save_style_qml`, `get_layer_labeling`, `set_layer_labeling` |
+| **Connections** | `list_connections`, `list_connection_tables`, `add_layer_from_connection`, `import_layer_to_connection`, `execute_connection_sql` |
+| **Rendering** | `render_map`, `get_canvas_screenshot`, `get_3d_screenshot`, `get_canvas_extent`, `set_canvas_extent`, `get_canvas_scale`, `set_canvas_scale` |
+| **Bookmarks & themes** | `add_bookmark`, `get_bookmarks`, `remove_bookmark`, `add_map_theme`, `get_map_themes`, `apply_map_theme`, `remove_map_theme` |
+| **Processing** | `execute_processing`, `execute_processing_batch`, `list_processing_algorithms`, `get_algorithm_help`, `get_processing_providers`, `create_processing_model`, `list_processing_models`, `run_model` |
+| **Analysis** | `raster_calculator`, `zonal_statistics`, `sample_raster_values`, `spatial_join` |
 | **Layouts** | `list_layouts`, `export_layout`, `create_layout`, `add_layout_map`, `add_layout_label`, `add_layout_legend`, `add_layout_scalebar`, `add_layout_picture`, `add_layout_table`, `get_layout_info`, `remove_layout` |
 | **Atlas** | `configure_atlas`, `export_atlas` |
 | **Query** | `execute_sql`, `evaluate_expression`, `identify_features` |
 | **Layer tree** | `get_layer_tree`, `create_layer_group`, `move_layer_to_group`, `duplicate_layer`, `set_layer_order` |
 | **Plugins** | `list_plugins`, `get_plugin_info`, `reload_plugin` |
-| **System** | `ping`, `diagnose`, `get_qgis_info`, `get_raster_info`, `get_message_log`, `execute_code`, `batch_commands`, `validate_expression`, `get_project_variables`, `set_project_variable`, `get_setting`, `set_setting`, `transform_coordinates` |
+| **System** | `ping`, `diagnose`, `list_qgis_instances`, `get_qgis_info`, `get_raster_info`, `get_message_log`, `execute_code`, `batch_commands`, `validate_expression`, `get_project_variables`, `set_project_variable`, `get_setting`, `set_setting`, `transform_coordinates` |
 
 All tools are async with human-readable titles and annotations (`readOnly`, `destructive`, `idempotent`). Destructive tools ask for confirmation via MCP elicitation when supported; clients without elicitation proceed normally (fail-open) since tools are already gated by `ToolAnnotations`. Long-running tools report progress via MCP logging.
 
 ### Compound tool mode
 
-Set `QGIS_MCP_TOOL_MODE=compound` to reduce the granular tools to 25 grouped tools (every granular command stays reachable), cutting schema overhead per LLM turn. Each compound tool takes an `action` parameter plus a `params` object holding that action's parameters:
+Set `QGIS_MCP_TOOL_MODE=compound` to reduce the granular tools to 27 grouped tools (every granular command stays reachable), cutting schema overhead per LLM turn. Each compound tool takes an `action` parameter plus a `params` object holding that action's parameters:
 
 ```bash
 QGIS_MCP_TOOL_MODE=compound uv run --no-sync src/qgis_mcp/server.py
@@ -281,11 +361,12 @@ Groups: `system`, `project`, `layer`, `features`, `selection`, `style`, `canvas`
 |---------------------|---------|-------------|
 | `QGIS_MCP_HOST` | `localhost` | Host for socket connection |
 | `QGIS_MCP_PORT` | `9876` | Port for socket connection |
+| `QGIS_MCP_INSTANCES` | _(unset)_ | Address several running QGIS windows from one server. See [Multiple QGIS instances](#multiple-qgis-instances). |
 | `QGIS_MCP_TOKEN` | _(unset)_ | Optional shared secret. When set, the plugin rejects any command without a matching token. See [Authentication](#authentication). |
 | `QGIS_MCP_TRANSPORT` | `stdio` | MCP transport: `stdio` or `streamable-http` |
 | `QGIS_MCP_LOG_FILE` | `~/.local/share/qgis-mcp/server.log` | Log file path (empty to disable) |
 | `QGIS_MCP_LOG_LEVEL` | `INFO` | File log level |
-| `QGIS_MCP_TOOL_MODE` | `granular` | `granular` (103 tools) or `compound` (25 grouped) |
+| `QGIS_MCP_TOOL_MODE` | `granular` | `granular` (117 tools) or `compound` (27 grouped) |
 | `QGIS_MCP_AUTO_APPROVE_EXECUTE_CODE` | _(unset)_ | Set to `1`/`true`/`yes` to skip elicitation for `execute_code` only |
 
 ### Authentication
@@ -309,6 +390,30 @@ By default the socket has **no authentication** — it binds to `localhost` only
 
 The token is compared in constant time. When `QGIS_MCP_TOKEN` is unset (the default), behaviour is unchanged. This raises the bar against other local users/processes; a process running as the same user can still read the token from your config, so it is not a sandbox.
 
+### Multiple QGIS instances
+
+One server registration can drive several running QGIS windows. Start each QGIS with the plugin on its own port, then list them in `QGIS_MCP_INSTANCES` as comma-separated `name=port` or `name=host:port` entries:
+
+```json
+{
+  "mcpServers": {
+    "qgis": {
+      "command": "uvx",
+      "args": ["--from", "https://github.com/nkarasiak/qgis-mcp/archive/refs/heads/main.zip", "qgis-mcp-server"],
+      "env": { "QGIS_MCP_INSTANCES": "default=9876,planning=9877,archive=lab-box:9878" }
+    }
+  }
+}
+```
+
+- Every tool takes an optional `instance` argument (`get_layers(instance="planning")`). Omitting it targets the entry named `default`, or — when no entry is called `default` — the **first** entry listed, so `planning=9877,archive=9878` works without renaming anything.
+- `list_qgis_instances` returns the configured names with their host, port, and current reachability. An unknown name is rejected with the list of valid names.
+- Instance names match `[A-Za-z0-9_-]+`; entries without a host use `QGIS_MCP_HOST` (default `localhost`).
+- Each instance has its own pooled connection and its own lock, so two QGIS windows can be driven concurrently.
+- **Not supported with `QGIS_MCP_TOOL_MODE=compound`.** Compound tools carry no `instance` argument, so every call would silently hit one instance; configuring more than one instance in compound mode refuses to start rather than routing writes to the wrong QGIS.
+- When `QGIS_MCP_INSTANCES` is unset, exactly one instance named `default` is defined from `QGIS_MCP_HOST`/`QGIS_MCP_PORT` — existing setups are unaffected.
+- `QGIS_MCP_TOKEN` is shared across instances: the same secret must be set in every QGIS.
+
 ## Contributing
 
 ```bash
@@ -318,6 +423,8 @@ python install.py   # symlinks plugin + configures your MCP client
 ```
 
 `install.py` options: `--clients claude-desktop,cursor`, `--remote` (uvx instead of uv run), `--profile myprofile`, `--uninstall`.
+
+Known client names: `claude-desktop`, `cursor`, `vscode`, `windsurf`, `zed`, `claude-code`, `codex`, `opencode`, `hermes`, `kimi`, `gemini`, `qwen`, `copilot-cli`, `lmstudio`.
 
 > **Windows (Microsoft Store / MSIX Claude Desktop):** `install.py` uses `--directory` instead of `cwd` in generated configs. This is required for Store-installed Claude Desktop, which runs MCP servers in an MSIX sandbox that silently drops `cwd`. If you configure manually, use `uv --directory "/path/to/qgis-mcp" run --no-sync src/qgis_mcp/server.py` — this works on both MSIX and standalone installs. You can identify a Store install when the config file is under `%LOCALAPPDATA%\Packages\Claude_<id>\LocalCache\Roaming\Claude\` instead of `%APPDATA%\Claude\`.
 
