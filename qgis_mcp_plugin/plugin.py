@@ -3977,7 +3977,8 @@ def _client_config_registry(repo_dir):
         claude_cfg = home / ".config" / "Claude" / "claude_desktop_config.json"
 
     cursor_cfg = home / ".cursor" / "mcp.json"
-    windsurf_cfg = home / ".windsurf" / "mcp.json"
+    # Windsurf reads ~/.codeium/windsurf/mcp_config.json on every platform.
+    windsurf_cfg = home / ".codeium" / "windsurf" / "mcp_config.json"
     vscode_cfg = repo_dir / ".vscode" / "mcp.json"
 
     if sys.platform == "win32":

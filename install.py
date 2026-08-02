@@ -373,6 +373,7 @@ def _jsonc_to_json(text) -> str:
     caseE = re.sub(r',\s*([}\]])', r'\1', casesBCD)
     return caseE
 
+
 def _read_json(path: Path) -> dict:
     if not path.exists() or not (text := path.read_text(encoding="utf-8").strip()):
         return {}
