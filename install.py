@@ -2,7 +2,8 @@
 """Multi-client installer for QGIS MCP.
 
 Symlinks the QGIS plugin and configures MCP clients (Claude Desktop,
-Cursor, VS Code Copilot, Windsurf, Zed, Claude Code, Codex CLI, opencode).
+Cursor, VS Code Copilot, Windsurf, Zed, Claude Code, Codex CLI, opencode,
+Kimi Code CLI, Gemini CLI, Qwen Code, GitHub Copilot CLI, LM Studio).
 
 Usage:
     python install.py                          # Interactive menu
@@ -108,6 +109,13 @@ def _client_registry() -> dict[str, ClientInfo]:
     # Requires a .bat launcher to avoid Hermes's venv polluting the MCP server.
     hermes_cfg = appdata / "Hermes" / "config.yaml" if sys.platform == "win32" else None
 
+    # Clients sharing Claude Desktop's mcpServers + command/args schema.
+    kimi_cfg = Path(os.environ.get("KIMI_CODE_HOME", home / ".kimi-code")) / "mcp.json"
+    gemini_cfg = home / ".gemini" / "settings.json"
+    qwen_cfg = home / ".qwen" / "settings.json"
+    copilot_cfg = Path(os.environ.get("COPILOT_HOME", home / ".copilot")) / "mcp-config.json"
+    lmstudio_cfg = home / ".lmstudio" / "mcp.json"
+
     return {
         "claude-desktop": {"path": claude_cfg, "key": "mcpServers"},
         "cursor": {"path": cursor_cfg, "key": "mcpServers"},
@@ -118,6 +126,11 @@ def _client_registry() -> dict[str, ClientInfo]:
         "codex": {"print_only": True, "cli": "codex"},
         "opencode": {"path": opencode_cfg, "key": "mcp", "entry_format": "opencode"},
         "hermes": {"print_only": True, "entry_format": "hermes", "hermes_cfg": hermes_cfg},
+        "kimi": {"path": kimi_cfg, "key": "mcpServers"},
+        "gemini": {"path": gemini_cfg, "key": "mcpServers"},
+        "qwen": {"path": qwen_cfg, "key": "mcpServers"},
+        "copilot-cli": {"path": copilot_cfg, "key": "mcpServers"},
+        "lmstudio": {"path": lmstudio_cfg, "key": "mcpServers"},
     }
 
 
@@ -516,7 +529,10 @@ def unconfigure_client(client_name: str) -> None:
 
 # ── Interactive menu ────────────────────────────────────────────────────────
 
-ALL_CLIENTS = ["claude-desktop", "cursor", "vscode", "windsurf", "zed", "claude-code", "codex", "opencode", "hermes"]
+ALL_CLIENTS = [
+    "claude-desktop", "cursor", "vscode", "windsurf", "zed", "claude-code", "codex",
+    "opencode", "hermes", "kimi", "gemini", "qwen", "copilot-cli", "lmstudio",
+]
 
 
 def interactive_menu() -> list[str]:

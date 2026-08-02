@@ -85,6 +85,40 @@ Or, if you have a local clone of this repository:
 
 ---
 
+## Config file locations per client
+
+These clients all use the generic `mcpServers` + `command`/`args` block above, so
+`python install.py --non-interactive --clients <name>` writes it for you (merging into the
+existing file and leaving a `.bak` beside it).
+
+| Client | `--clients` name | Config file | Root key |
+|---|---|---|---|
+| Claude Desktop | `claude-desktop` | `%APPDATA%\Claude\claude_desktop_config.json` (macOS: `~/Library/Application Support/Claude/`, Linux: `~/.config/Claude/`) | `mcpServers` |
+| Cursor | `cursor` | `~/.cursor/mcp.json` | `mcpServers` |
+| VS Code (project-local) | `vscode` | `<repo>/.vscode/mcp.json` | `mcpServers` |
+| Windsurf | `windsurf` | `~/.codeium/windsurf/mcp_config.json` | `mcpServers` |
+| Zed | `zed` | `~/.config/zed/settings.json` (Windows: `%APPDATA%\Zed\settings.json`) | `context_servers` |
+| Kimi Code CLI | `kimi` | `~/.kimi-code/mcp.json` (or `$KIMI_CODE_HOME/mcp.json`) | `mcpServers` |
+| Gemini CLI | `gemini` | `~/.gemini/settings.json` | `mcpServers` |
+| Qwen Code | `qwen` | `~/.qwen/settings.json` | `mcpServers` |
+| GitHub Copilot CLI | `copilot-cli` | `~/.copilot/mcp-config.json` (or `$COPILOT_HOME/mcp-config.json`) | `mcpServers` |
+| LM Studio | `lmstudio` | `~/.lmstudio/mcp.json` | `mcpServers` |
+| opencode | `opencode` | `~/.config/opencode/config.json` (Windows: `%APPDATA%\opencode\config.json`) | `mcp` (`{"type": "local", "command": [...]}`) |
+
+Claude Code (`claude-code`) and Codex CLI (`codex`) are configured through their own
+`mcp add` subcommands instead of a config file; Hermes needs manual steps (below).
+
+Notes:
+
+- Kimi also reads a project-level `.kimi-code/mcp.json` from the working directory, which
+  overrides the user-level file.
+- Gemini CLI and Qwen Code keep unrelated user settings in the same `settings.json`; the
+  installer merges rather than overwrites.
+- Gemini CLI / Qwen Code also ship `gemini mcp add` / `qwen mcp add` — writing the JSON works
+  even when those binaries are not on `PATH`.
+
+---
+
 ## Nous / Hermes-style agents
 
 The [Nous Research portal](https://portal.nousresearch.com/) and Hermes-based agents that

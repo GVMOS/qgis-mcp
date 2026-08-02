@@ -3994,6 +3994,13 @@ def _client_config_registry(repo_dir):
         else None
     )
 
+    # Clients sharing Claude Desktop's mcpServers + command/args schema.
+    kimi_cfg = Path(os.environ.get("KIMI_CODE_HOME", home / ".kimi-code")) / "mcp.json"
+    gemini_cfg = home / ".gemini" / "settings.json"
+    qwen_cfg = home / ".qwen" / "settings.json"
+    copilot_cfg = Path(os.environ.get("COPILOT_HOME", home / ".copilot")) / "mcp-config.json"
+    lmstudio_cfg = home / ".lmstudio" / "mcp.json"
+
     return {
         "claude-desktop": {"path": claude_cfg, "key": "mcpServers"},
         "cursor": {"path": cursor_cfg, "key": "mcpServers"},
@@ -4003,6 +4010,11 @@ def _client_config_registry(repo_dir):
         "opencode": {"path": opencode_cfg, "key": "mcp"},
         "claude-code": {"print_only": True},
         "hermes": {"print_only": True, "entry_format": "hermes", "hermes_cfg": hermes_cfg},
+        "kimi": {"path": kimi_cfg, "key": "mcpServers"},
+        "gemini": {"path": gemini_cfg, "key": "mcpServers"},
+        "qwen": {"path": qwen_cfg, "key": "mcpServers"},
+        "copilot-cli": {"path": copilot_cfg, "key": "mcpServers"},
+        "lmstudio": {"path": lmstudio_cfg, "key": "mcpServers"},
     }
 
 
@@ -4104,7 +4116,11 @@ class MCPConfiguratorDialog(QDialog):
         client_row.addWidget(QLabel("Client:"))
         self.client_combo = QComboBox()
         self.client_combo.addItems(
-            ["claude-code", "claude-desktop", "cursor", "hermes", "opencode", "vscode", "windsurf", "zed"]
+            [
+                "claude-code", "claude-desktop", "copilot-cli", "cursor", "gemini",
+                "hermes", "kimi", "lmstudio", "opencode", "qwen", "vscode",
+                "windsurf", "zed",
+            ]
         )
         self.client_combo.setMinimumWidth(180)
         self.client_combo.currentTextChanged.connect(self._on_client_changed)
