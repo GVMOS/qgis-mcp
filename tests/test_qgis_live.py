@@ -844,10 +844,25 @@ def test_run_model_defaults_destination_parameters(client, setup_test_data):
     )
     assert resp["status"] == "success", resp.get("message")
     model_name = resp["result"]["name"]
-    resp = client.send_command(
-        "run_model", {"model": f"model:{model_name}", "parameters": {"src": setup_test_data}}
-    )
-    assert resp["status"] == "success", resp.get("message")
+    model_path = resp["result"]["path"]
+    try:
+        resp = client.send_command(
+            "run_model", {"model": f"model:{model_name}", "parameters": {"src": setup_test_data}}
+        )
+        assert resp["status"] == "success", resp.get("message")
+    finally:
+        # The model file lands in the QGIS profile's models folder; without
+        # this, every live run leaves one behind and they pile up.
+        client.send_command(
+            "execute_code",
+            {
+                "code": (
+                    f"import os\nos.remove(r'{model_path}')\n"
+                    "from qgis.core import QgsApplication\n"
+                    "QgsApplication.processingRegistry().providerById('model').refreshAlgorithms()"
+                )
+            },
+        )
 
 
 # --- Edit sessions, geometry writes, raster style, connections ---

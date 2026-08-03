@@ -3914,8 +3914,15 @@ class QgisMCPServer(QObject):
             alg.initAlgorithm()
             target = alg
         else:
+            registry = QgsApplication.processingRegistry()
+            alg = registry.algorithmById(model)
+            # Registered model ids carry a "model:" prefix, but callers see the
+            # bare name in create_processing_model's response — accept both.
+            if alg is None and isinstance(model, str) and not model.startswith("model:"):
+                alg = registry.algorithmById(f"model:{model}")
+                if alg is not None:
+                    model = f"model:{model}"
             target = model
-            alg = QgsApplication.processingRegistry().algorithmById(model)
 
         # Destination (sink/output) parameters have no default, so omitting one
         # aborts the run. The Processing GUI defaults them to a temporary layer;
