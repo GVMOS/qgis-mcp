@@ -245,9 +245,7 @@ def _hermes_bat_content(remote: bool) -> str:
     if remote:
         launch_cmd = f'uvx --from "{GITHUB_URL}" qgis-mcp-server'
     elif shutil.which("uv"):
-        launch_cmd = (
-            f'uv --directory "{REPO_DIR}" run --no-sync src/qgis_mcp/server.py'
-        )
+        launch_cmd = f'uv --directory "{REPO_DIR}" run --no-sync src/qgis_mcp/server.py'
     else:
         python = _venv_python()
         launch_cmd = f'"{python}" "{REPO_DIR / "src" / "qgis_mcp" / "server.py"}"'
@@ -353,6 +351,7 @@ def uninstall_plugin(profile: str, version: str = "auto") -> None:
 
 # ── Client configuration ───────────────────────────────────────────────────
 
+
 def _jsonc_to_json(text) -> str:
     """Convert potential JSONC json file to valid JSON
 
@@ -363,14 +362,11 @@ def _jsonc_to_json(text) -> str:
         - D: // inside string values preserved
         - E: Trailing commas in objects and arrays
     """
-    caseA = re.sub(r'/\*.*?\*/', '', text, flags=re.DOTALL)
+    caseA = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
     casesBCD = re.sub(
-        r'("(?:\\.|[^"\\])*")|//.*',
-        lambda m: m.group(1) or '',
-        caseA,
-        flags=re.MULTILINE
+        r'("(?:\\.|[^"\\])*")|//.*', lambda m: m.group(1) or "", caseA, flags=re.MULTILINE
     )
-    caseE = re.sub(r',\s*([}\]])', r'\1', casesBCD)
+    caseE = re.sub(r",\s*([}\]])", r"\1", casesBCD)
     return caseE
 
 
@@ -387,10 +383,7 @@ def _read_json(path: Path) -> dict:
         cleaned = _jsonc_to_json(text)
         return json.loads(cleaned)
     except json.JSONDecodeError as e:
-        raise ValueError(
-            f"Failed to parse {path}: not valid JSON or JSONC. "
-            f"Error: {e}"
-        ) from e
+        raise ValueError(f"Failed to parse {path}: not valid JSON or JSONC. Error: {e}") from e
 
 
 def _backup(path: Path) -> None:
@@ -426,8 +419,11 @@ def configure_client(client_name: str, remote: bool) -> None:
             add_args = ["uvx", "--from", GITHUB_URL, "qgis-mcp-server"]
         elif shutil.which("uv"):
             add_args = [
-                "uv", "run", "--no-sync",
-                "--directory", str(REPO_DIR),
+                "uv",
+                "run",
+                "--no-sync",
+                "--directory",
+                str(REPO_DIR),
                 "src/qgis_mcp/server.py",
             ]
         else:
@@ -531,8 +527,20 @@ def unconfigure_client(client_name: str) -> None:
 # ── Interactive menu ────────────────────────────────────────────────────────
 
 ALL_CLIENTS = [
-    "claude-desktop", "cursor", "vscode", "windsurf", "zed", "claude-code", "codex",
-    "opencode", "hermes", "kimi", "gemini", "qwen", "copilot-cli", "lmstudio",
+    "claude-desktop",
+    "cursor",
+    "vscode",
+    "windsurf",
+    "zed",
+    "claude-code",
+    "codex",
+    "opencode",
+    "hermes",
+    "kimi",
+    "gemini",
+    "qwen",
+    "copilot-cli",
+    "lmstudio",
 ]
 
 

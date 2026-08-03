@@ -114,11 +114,15 @@ class TestLayers:
         assert result["ymin"] < result["ymax"]
 
     def test_set_layer_visibility(self, client, cities_layer):
-        resp = client.send_command("set_layer_visibility", {"layer_id": cities_layer, "visible": False})
+        resp = client.send_command(
+            "set_layer_visibility", {"layer_id": cities_layer, "visible": False}
+        )
         assert resp["status"] == "success"
         assert resp["result"]["visible"] is False
 
-        resp = client.send_command("set_layer_visibility", {"layer_id": cities_layer, "visible": True})
+        resp = client.send_command(
+            "set_layer_visibility", {"layer_id": cities_layer, "visible": True}
+        )
         assert resp["status"] == "success"
         assert resp["result"]["visible"] is True
 
@@ -140,9 +144,7 @@ class TestLayers:
 
 class TestFeatures:
     def test_get_features_all(self, client, cities_layer):
-        resp = client.send_command(
-            "get_layer_features", {"layer_id": cities_layer, "limit": 50}
-        )
+        resp = client.send_command("get_layer_features", {"layer_id": cities_layer, "limit": 50})
         assert resp["status"] == "success"
         assert len(resp["result"]["features"]) == 20
 
@@ -208,7 +210,10 @@ class TestFeatures:
 
         resp = client.send_command(
             "update_features",
-            {"layer_id": cities_layer, "updates": [{"fid": fid, "attributes": {"population": 2200000}}]},
+            {
+                "layer_id": cities_layer,
+                "updates": [{"fid": fid, "attributes": {"population": 2200000}}],
+            },
         )
         assert resp["status"] == "success"
         assert resp["result"]["updated"] == 1
@@ -221,7 +226,10 @@ class TestFeatures:
         assert resp["result"]["features"][0]["population"] == 2200000
         client.send_command(
             "update_features",
-            {"layer_id": cities_layer, "updates": [{"fid": fid, "attributes": {"population": 2161000}}]},
+            {
+                "layer_id": cities_layer,
+                "updates": [{"fid": fid, "attributes": {"population": 2161000}}],
+            },
         )
 
     def test_add_and_delete_features(self, client, cities_layer):
@@ -230,7 +238,10 @@ class TestFeatures:
             {
                 "layer_id": cities_layer,
                 "features": [
-                    {"attributes": {"name": "TempCity", "population": 1, "country": "Test"}, "geometry_wkt": "POINT(0 0)"},
+                    {
+                        "attributes": {"name": "TempCity", "population": 1, "country": "Test"},
+                        "geometry_wkt": "POINT(0 0)",
+                    },
                 ],
             },
         )
@@ -252,7 +263,8 @@ class TestFeatures:
 class TestSelection:
     def test_select_by_expression(self, client, cities_layer):
         resp = client.send_command(
-            "select_features", {"layer_id": cities_layer, "expression": "country = 'France' OR country = 'Germany'"}
+            "select_features",
+            {"layer_id": cities_layer, "expression": "country = 'France' OR country = 'Germany'"},
         )
         assert resp["status"] == "success"
         assert resp["result"]["selected"] == 2
@@ -279,7 +291,13 @@ class TestStyling:
     def test_graduated_style(self, client, cities_layer):
         resp = client.send_command(
             "set_layer_style",
-            {"layer_id": cities_layer, "style_type": "graduated", "field": "population", "classes": 5, "color_ramp": "Viridis"},
+            {
+                "layer_id": cities_layer,
+                "style_type": "graduated",
+                "field": "population",
+                "classes": 5,
+                "color_ramp": "Viridis",
+            },
         )
         assert resp["status"] == "success"
 
@@ -328,7 +346,9 @@ class TestCanvas:
             assert key in resp["result"]
 
     def test_set_canvas_extent(self, client):
-        resp = client.send_command("set_canvas_extent", {"xmin": -10, "ymin": 35, "xmax": 40, "ymax": 60})
+        resp = client.send_command(
+            "set_canvas_extent", {"xmin": -10, "ymin": 35, "xmax": 40, "ymax": 60}
+        )
         assert resp["status"] == "success"
 
     def test_get_canvas_scale(self, client):
@@ -367,7 +387,12 @@ class TestProcessing:
             "execute_processing",
             {
                 "algorithm": "native:buffer",
-                "parameters": {"INPUT": cities_layer, "DISTANCE": 1, "SEGMENTS": 5, "OUTPUT": "memory:"},
+                "parameters": {
+                    "INPUT": cities_layer,
+                    "DISTANCE": 1,
+                    "SEGMENTS": 5,
+                    "OUTPUT": "memory:",
+                },
             },
             timeout=60,
         )
@@ -443,7 +468,11 @@ class TestTransforms:
     def test_transform_single_point(self, client):
         resp = client.send_command(
             "transform_coordinates",
-            {"source_crs": "EPSG:4326", "target_crs": "EPSG:3857", "point": {"x": 2.35, "y": 48.86}},
+            {
+                "source_crs": "EPSG:4326",
+                "target_crs": "EPSG:3857",
+                "point": {"x": 2.35, "y": 48.86},
+            },
         )
         assert resp["status"] == "success"
         pt = resp["result"]["point"]
@@ -670,6 +699,7 @@ class TestConcurrentClients:
 
     def test_five_concurrent_pings(self):
         """Five clients each sending a ping in parallel threads."""
+
         def ping_once():
             c = make_client()
             try:
@@ -686,6 +716,7 @@ class TestConcurrentClients:
 
     def test_concurrent_reads(self, cities_layer):
         """Five clients reading features simultaneously."""
+
         def read_features():
             c = make_client()
             try:
@@ -705,6 +736,7 @@ class TestConcurrentClients:
 
     def test_concurrent_mixed_operations(self, cities_layer):
         """Parallel clients doing different operations (reads + canvas + stats)."""
+
         def op_features():
             c = make_client()
             try:
@@ -722,7 +754,9 @@ class TestConcurrentClients:
         def op_stats():
             c = make_client()
             try:
-                return c.send_command("get_field_statistics", {"layer_id": cities_layer, "field_name": "population"})
+                return c.send_command(
+                    "get_field_statistics", {"layer_id": cities_layer, "field_name": "population"}
+                )
             finally:
                 c.disconnect()
 
@@ -810,9 +844,7 @@ class TestHeavyLoad:
         assert resp["result"]["count"] == total
 
         # Delete all
-        resp = client.send_command(
-            "delete_features", {"layer_id": layer_id, "expression": "TRUE"}
-        )
+        resp = client.send_command("delete_features", {"layer_id": layer_id, "expression": "TRUE"})
         assert resp["status"] == "success"
         assert resp["result"]["deleted"] == total
 

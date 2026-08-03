@@ -654,18 +654,18 @@ def test_raster_info_no_redundant_fields(client, setup_test_data):
 def test_layout_build_and_inspect(client):
     name = f"layout_{uuid.uuid4().hex[:8]}"
     assert client.send_command("create_layout", {"name": name})["status"] == "success"
-    assert client.send_command(
-        "add_layout_map", {"layout_name": name, "x": 10, "y": 10, "width": 100, "height": 80}
-    )["status"] == "success"
-    assert client.send_command(
-        "add_layout_label", {"layout_name": name, "text": "Title"}
-    )["status"] == "success"
-    assert client.send_command(
-        "add_layout_legend", {"layout_name": name}
-    )["status"] == "success"
-    assert client.send_command(
-        "add_layout_scalebar", {"layout_name": name}
-    )["status"] == "success"
+    assert (
+        client.send_command(
+            "add_layout_map", {"layout_name": name, "x": 10, "y": 10, "width": 100, "height": 80}
+        )["status"]
+        == "success"
+    )
+    assert (
+        client.send_command("add_layout_label", {"layout_name": name, "text": "Title"})["status"]
+        == "success"
+    )
+    assert client.send_command("add_layout_legend", {"layout_name": name})["status"] == "success"
+    assert client.send_command("add_layout_scalebar", {"layout_name": name})["status"] == "success"
 
     info = client.send_command("get_layout_info", {"layout_name": name})
     assert info["status"] == "success"
@@ -703,9 +703,7 @@ def test_configure_atlas(client, setup_test_data):
 
 def test_execute_sql_inline(client, setup_test_data):
     layers_resp = client.send_command("get_layers")
-    layer = next(
-        lyr for lyr in layers_resp["result"]["layers"] if lyr["id"] == setup_test_data
-    )
+    layer = next(lyr for lyr in layers_resp["result"]["layers"] if lyr["id"] == setup_test_data)
     query = f'select count(*) as n from "{layer["name"]}"'
     resp = client.send_command("execute_sql", {"query": query})
     assert resp["status"] == "success"
@@ -720,9 +718,7 @@ def test_evaluate_expression(client, setup_test_data):
 
 def test_evaluate_expression_aggregate(client, setup_test_data):
     layers_resp = client.send_command("get_layers")
-    layer = next(
-        lyr for lyr in layers_resp["result"]["layers"] if lyr["id"] == setup_test_data
-    )
+    layer = next(lyr for lyr in layers_resp["result"]["layers"] if lyr["id"] == setup_test_data)
     expr = f"aggregate('{layer['name']}', 'sum', \"value\")"
     resp = client.send_command("evaluate_expression", {"expression": expr})
     assert resp["status"] == "success"
@@ -778,9 +774,7 @@ def test_execute_sql_ignores_non_vector_layers(client, setup_test_data):
     raster_id = add["result"]["id"]
     try:
         layers_resp = client.send_command("get_layers")
-        layer = next(
-            lyr for lyr in layers_resp["result"]["layers"] if lyr["id"] == setup_test_data
-        )
+        layer = next(lyr for lyr in layers_resp["result"]["layers"] if lyr["id"] == setup_test_data)
         resp = client.send_command(
             "execute_sql", {"query": f'select count(*) as n from "{layer["name"]}"'}
         )
@@ -788,9 +782,7 @@ def test_execute_sql_ignores_non_vector_layers(client, setup_test_data):
         assert resp["result"]["rows"][0]["n"] == 5
 
         # An explicitly requested raster is a hard error, not a silent skip.
-        resp = client.send_command(
-            "execute_sql", {"query": "select 1", "layers": [raster_id]}
-        )
+        resp = client.send_command("execute_sql", {"query": "select 1", "layers": [raster_id]})
         assert resp["status"] == "error"
         assert "not a vector layer" in resp["message"]
     finally:

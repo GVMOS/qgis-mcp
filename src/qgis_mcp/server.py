@@ -435,9 +435,7 @@ async def _send(
 ) -> dict:
     """Send a command via asyncio.to_thread to avoid blocking the event loop."""
     try:
-        return await asyncio.to_thread(
-            _send_sync, command_type, params, timeout, instance, retries
-        )
+        return await asyncio.to_thread(_send_sync, command_type, params, timeout, instance, retries)
     except Exception as exc:
         message = str(exc)
         hint = _get_error_hint(message)
@@ -586,9 +584,7 @@ async def _instance_identity(instance: str) -> dict[str, Any]:
     instance that answered the probe but not this is still usefully reachable.
     """
     try:
-        info = await _send(
-            "get_qgis_info", timeout=_IDENTITY_TIMEOUT, instance=instance, retries=1
-        )
+        info = await _send("get_qgis_info", timeout=_IDENTITY_TIMEOUT, instance=instance, retries=1)
     except Exception as exc:
         logger.warning("Could not identify instance %r: %s", instance, exc)
         return {}
@@ -3250,7 +3246,7 @@ def create_processing_model_prompt(description: str) -> list[UserMessage]:
         UserMessage(
             content=(
                 "Build a QGIS Processing Model that implements this workflow:\n\n"
-                f"\"{description}\"\n\n"
+                f'"{description}"\n\n'
                 "Call the `create_processing_model` tool ONCE. Algorithm lookup and parameter "
                 "validation happen inside the plugin against QGIS's Processing registry — do NOT "
                 "call `list_processing_algorithms` or `get_algorithm_help`. For each step pass a "

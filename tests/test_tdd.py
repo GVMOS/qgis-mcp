@@ -51,7 +51,12 @@ class TestLayerLifecycle:
         """Removing a layer twice must error on the second call."""
         resp = client.send_command(
             "create_memory_layer",
-            {"name": f"dbl_{uuid.uuid4().hex[:4]}", "geometry_type": "Point", "crs": "EPSG:4326", "fields": []},
+            {
+                "name": f"dbl_{uuid.uuid4().hex[:4]}",
+                "geometry_type": "Point",
+                "crs": "EPSG:4326",
+                "fields": [],
+            },
         )
         lid = resp["result"]["id"]
         r1 = client.send_command("remove_layer", {"layer_id": lid})
@@ -62,7 +67,12 @@ class TestLayerLifecycle:
     def test_empty_layer_has_zero_features(self, client, test_project):
         resp = client.send_command(
             "create_memory_layer",
-            {"name": f"empty_{uuid.uuid4().hex[:4]}", "geometry_type": "Point", "crs": "EPSG:4326", "fields": [{"name": "a", "type": "string"}]},
+            {
+                "name": f"empty_{uuid.uuid4().hex[:4]}",
+                "geometry_type": "Point",
+                "crs": "EPSG:4326",
+                "fields": [{"name": "a", "type": "string"}],
+            },
         )
         lid = resp["result"]["id"]
         resp = client.send_command("get_layer_features", {"layer_id": lid, "limit": 50})
@@ -81,43 +91,72 @@ class TestFeatureCRUD:
 
     def test_add_feature_increments_count(self, client, cities_layer):
         """Adding a feature must increase the count by exactly 1."""
-        r1 = client.send_command("get_field_statistics", {"layer_id": cities_layer, "field_name": "name"})
+        r1 = client.send_command(
+            "get_field_statistics", {"layer_id": cities_layer, "field_name": "name"}
+        )
         before = r1["result"]["count"]
 
         client.send_command(
             "add_features",
-            {"layer_id": cities_layer, "features": [
-                {"attributes": {"name": "TestAdd", "population": 1, "country": "X"}, "geometry_wkt": "POINT(0 0)"},
-            ]},
+            {
+                "layer_id": cities_layer,
+                "features": [
+                    {
+                        "attributes": {"name": "TestAdd", "population": 1, "country": "X"},
+                        "geometry_wkt": "POINT(0 0)",
+                    },
+                ],
+            },
         )
 
-        r2 = client.send_command("get_field_statistics", {"layer_id": cities_layer, "field_name": "name"})
+        r2 = client.send_command(
+            "get_field_statistics", {"layer_id": cities_layer, "field_name": "name"}
+        )
         assert r2["result"]["count"] == before + 1
 
         # Cleanup
-        client.send_command("delete_features", {"layer_id": cities_layer, "expression": "\"name\" = 'TestAdd'"})
+        client.send_command(
+            "delete_features", {"layer_id": cities_layer, "expression": "\"name\" = 'TestAdd'"}
+        )
 
     def test_delete_by_expression_only_deletes_matching(self, client, cities_layer):
         """Delete must only remove features matching the expression."""
-        r1 = client.send_command("get_field_statistics", {"layer_id": cities_layer, "field_name": "name"})
+        r1 = client.send_command(
+            "get_field_statistics", {"layer_id": cities_layer, "field_name": "name"}
+        )
         total_before = r1["result"]["count"]
 
         # Add 2 temp features, delete only 1 by expression
         client.send_command(
             "add_features",
-            {"layer_id": cities_layer, "features": [
-                {"attributes": {"name": "DelA", "population": 1, "country": "X"}, "geometry_wkt": "POINT(0 0)"},
-                {"attributes": {"name": "DelB", "population": 1, "country": "X"}, "geometry_wkt": "POINT(1 1)"},
-            ]},
+            {
+                "layer_id": cities_layer,
+                "features": [
+                    {
+                        "attributes": {"name": "DelA", "population": 1, "country": "X"},
+                        "geometry_wkt": "POINT(0 0)",
+                    },
+                    {
+                        "attributes": {"name": "DelB", "population": 1, "country": "X"},
+                        "geometry_wkt": "POINT(1 1)",
+                    },
+                ],
+            },
         )
-        resp = client.send_command("delete_features", {"layer_id": cities_layer, "expression": "\"name\" = 'DelA'"})
+        resp = client.send_command(
+            "delete_features", {"layer_id": cities_layer, "expression": "\"name\" = 'DelA'"}
+        )
         assert resp["result"]["deleted"] == 1
 
-        r2 = client.send_command("get_field_statistics", {"layer_id": cities_layer, "field_name": "name"})
+        r2 = client.send_command(
+            "get_field_statistics", {"layer_id": cities_layer, "field_name": "name"}
+        )
         assert r2["result"]["count"] == total_before + 1  # +2 added, -1 deleted
 
         # Cleanup the other
-        client.send_command("delete_features", {"layer_id": cities_layer, "expression": "\"name\" = 'DelB'"})
+        client.send_command(
+            "delete_features", {"layer_id": cities_layer, "expression": "\"name\" = 'DelB'"}
+        )
 
     def test_update_nonexistent_fid_does_not_crash(self, client, cities_layer):
         """Updating a fid that doesn't exist must not crash the plugin.
@@ -127,7 +166,10 @@ class TestFeatureCRUD:
         """
         resp = client.send_command(
             "update_features",
-            {"layer_id": cities_layer, "updates": [{"fid": 999999, "attributes": {"name": "Ghost"}}]},
+            {
+                "layer_id": cities_layer,
+                "updates": [{"fid": 999999, "attributes": {"name": "Ghost"}}],
+            },
         )
         assert resp["status"] == "error"
         assert "no feature with fid" in resp["message"]
@@ -138,15 +180,20 @@ class TestFeatureCRUD:
         """Adding a feature with a nonexistent field should not crash."""
         resp = client.send_command(
             "add_features",
-            {"layer_id": cities_layer, "features": [
-                {"attributes": {"nonexistent_field": "val"}, "geometry_wkt": "POINT(0 0)"},
-            ]},
+            {
+                "layer_id": cities_layer,
+                "features": [
+                    {"attributes": {"nonexistent_field": "val"}, "geometry_wkt": "POINT(0 0)"},
+                ],
+            },
         )
         # Should either succeed (ignoring unknown field) or return a clear error
         assert resp["status"] in ("success", "error")
         # If it succeeded, clean up
         if resp["status"] == "success":
-            client.send_command("delete_features", {"layer_id": cities_layer, "expression": "\"name\" IS NULL"})
+            client.send_command(
+                "delete_features", {"layer_id": cities_layer, "expression": '"name" IS NULL'}
+            )
 
     def test_feature_fid_stable_after_update(self, client, cities_layer):
         """A feature's fid must not change after an attribute update."""
@@ -158,7 +205,10 @@ class TestFeatureCRUD:
 
         client.send_command(
             "update_features",
-            {"layer_id": cities_layer, "updates": [{"fid": fid_before, "attributes": {"population": 2200000}}]},
+            {
+                "layer_id": cities_layer,
+                "updates": [{"fid": fid_before, "attributes": {"population": 2200000}}],
+            },
         )
 
         resp = client.send_command(
@@ -170,7 +220,10 @@ class TestFeatureCRUD:
         # Restore
         client.send_command(
             "update_features",
-            {"layer_id": cities_layer, "updates": [{"fid": fid_before, "attributes": {"population": 2161000}}]},
+            {
+                "layer_id": cities_layer,
+                "updates": [{"fid": fid_before, "attributes": {"population": 2161000}}],
+            },
         )
 
 
@@ -191,7 +244,9 @@ class TestSelectionInvariants:
 
     def test_select_impossible_expression_gives_zero(self, client, cities_layer):
         """Expression that matches nothing must select 0 features."""
-        client.send_command("select_features", {"layer_id": cities_layer, "expression": "population < 0"})
+        client.send_command(
+            "select_features", {"layer_id": cities_layer, "expression": "population < 0"}
+        )
         resp = client.send_command("get_selection", {"layer_id": cities_layer})
         assert resp["result"]["count"] == 0
 
@@ -263,9 +318,7 @@ class TestPagination:
         assert len(resp["result"]["features"]) == 0
 
     def test_limit_zero_returns_empty(self, client, cities_layer):
-        resp = client.send_command(
-            "get_layer_features", {"layer_id": cities_layer, "limit": 0}
-        )
+        resp = client.send_command("get_layer_features", {"layer_id": cities_layer, "limit": 0})
         assert resp["status"] == "success"
         assert len(resp["result"]["features"]) == 0
 
@@ -276,7 +329,8 @@ class TestPagination:
         page_size = 7
         while True:
             resp = client.send_command(
-                "get_layer_features", {"layer_id": cities_layer, "limit": page_size, "offset": offset}
+                "get_layer_features",
+                {"layer_id": cities_layer, "limit": page_size, "offset": offset},
             )
             assert resp["status"] == "success"
             features = resp["result"]["features"]
@@ -351,7 +405,9 @@ class TestCanvasState:
         client.send_command("set_canvas_extent", {"xmin": 2, "ymin": 48, "xmax": 3, "ymax": 49})
         r1 = client.send_command("get_canvas_scale")
 
-        client.send_command("set_canvas_extent", {"xmin": -180, "ymin": -90, "xmax": 180, "ymax": 90})
+        client.send_command(
+            "set_canvas_extent", {"xmin": -180, "ymin": -90, "xmax": 180, "ymax": 90}
+        )
         r2 = client.send_command("get_canvas_scale")
 
         assert r1["status"] == "success" and r2["status"] == "success"
@@ -397,8 +453,12 @@ class TestBookmarkInvariants:
     def test_add_duplicate_name_creates_two(self, client, test_project):
         """Two bookmarks with the same name must both exist."""
         name = f"dup_{uuid.uuid4().hex[:4]}"
-        r1 = client.send_command("add_bookmark", {"name": name, "xmin": 0, "ymin": 0, "xmax": 1, "ymax": 1})
-        r2 = client.send_command("add_bookmark", {"name": name, "xmin": 2, "ymin": 2, "xmax": 3, "ymax": 3})
+        r1 = client.send_command(
+            "add_bookmark", {"name": name, "xmin": 0, "ymin": 0, "xmax": 1, "ymax": 1}
+        )
+        r2 = client.send_command(
+            "add_bookmark", {"name": name, "xmin": 2, "ymin": 2, "xmax": 3, "ymax": 3}
+        )
         assert r1["status"] == "success" and r2["status"] == "success"
 
         resp = client.send_command("get_bookmarks")
@@ -425,11 +485,13 @@ class TestBatchErrorIsolation:
         """A failing command in a batch must not prevent other commands from running."""
         resp = client.send_command(
             "batch",
-            {"commands": [
-                {"type": "ping", "params": {}},
-                {"type": "get_layer_features", "params": {"layer_id": "nonexistent"}},
-                {"type": "ping", "params": {}},
-            ]},
+            {
+                "commands": [
+                    {"type": "ping", "params": {}},
+                    {"type": "get_layer_features", "params": {"layer_id": "nonexistent"}},
+                    {"type": "ping", "params": {}},
+                ]
+            },
             timeout=60,
         )
         assert resp["status"] == "success"

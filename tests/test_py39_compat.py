@@ -76,8 +76,9 @@ def test_no_runtime_evaluated_pep604_annotations():
         f"`from __future__ import annotations` — fails to import on 3.9: {offenders}"
     )
 
-
     # keyword arguments added to builtins after 3.9 -> "takes no keyword arguments"
+
+
 NEWER_THAN_39_KWARGS = {
     "zip": {"strict"},
 }

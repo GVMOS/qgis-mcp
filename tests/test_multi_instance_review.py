@@ -401,15 +401,15 @@ async def test_resource_descriptions_name_the_implicit_instance():
     # Templated URIs (qgis://layers/{layer_id}/...) are reported separately from
     # the static ones, and every one of them reads through _send_sync.
     static = [(str(r.uri), r.description) for r in await srv.mcp.list_resources()]
-    templates = [
-        (t.uriTemplate, t.description) for t in await srv.mcp.list_resource_templates()
-    ]
+    templates = [(t.uriTemplate, t.description) for t in await srv.mcp.list_resource_templates()]
     routed = [
         (uri, description)
         for uri, description in static + templates
         if uri.startswith("qgis://") and "llms" not in uri and "cache" not in uri
     ]
-    undocumented = [uri for uri, description in routed if "implicit instance" not in (description or "")]
+    undocumented = [
+        uri for uri, description in routed if "implicit instance" not in (description or "")
+    ]
 
     assert len(routed) == 6, f"expected 6 instance-routed resources, got {[u for u, _ in routed]}"
     assert undocumented == [], f"undocumented routing on: {undocumented}"

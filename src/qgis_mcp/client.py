@@ -230,7 +230,9 @@ class QgisMCPClient:
 
     def execute_processing(self, algorithm, parameters):
         return self.send_command(
-            "execute_processing", {"algorithm": algorithm, "parameters": parameters}, timeout=TIMEOUT_LONG
+            "execute_processing",
+            {"algorithm": algorithm, "parameters": parameters},
+            timeout=TIMEOUT_LONG,
         )
 
     def save_project(self, path=None):

@@ -29,6 +29,14 @@ dev = ["pytest>=7.0", "pytest-asyncio>=0.23", "anyio>=4,<5"]
 target-version = "py312"
 line-length = 100
 
+[tool.ruff.format]
+# `ruff format` emits W503 (line break before binary operator) and E203
+# (whitespace before ':' in slices). The QGIS Plugin Repository's upload-time
+# check enables both, and .flake8 mirrors it — so formatting the plugin would
+# hand the uploader nine violations it currently has none of. Keep the plugin
+# hand-formatted to the uploader's taste; everything else follows the formatter.
+exclude = ["qgis_mcp_plugin/*"]
+
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
 ignore = [
