@@ -233,7 +233,7 @@ CONN_CAP_EXECUTE_SQL = _enum(
     (QgsAbstractDatabaseProviderConnection, "ExecuteSql"),
 )
 
-# ── Vector layer export result ───────────────────────────────────────
+# ── Data source URI SSL modes ────────────────────────────────────────
 URI_SSL_PREFER = _enum((QgsDataSourceUri, "SslMode.SslPrefer"), (QgsDataSourceUri, "SslPrefer"))
 URI_SSL_DISABLE = _enum((QgsDataSourceUri, "SslMode.SslDisable"), (QgsDataSourceUri, "SslDisable"))
 URI_SSL_ALLOW = _enum((QgsDataSourceUri, "SslMode.SslAllow"), (QgsDataSourceUri, "SslAllow"))
@@ -245,6 +245,7 @@ URI_SSL_VERIFY_FULL = _enum(
     (QgsDataSourceUri, "SslMode.SslVerifyFull"), (QgsDataSourceUri, "SslVerifyFull")
 )
 
+# ── Vector layer export result ───────────────────────────────────────
 EXPORT_SUCCESS = _enum(
     (Qgis, "VectorExportResult.Success"),
     (QgsVectorLayerExporter, "NoError"),

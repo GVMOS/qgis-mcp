@@ -212,9 +212,6 @@ _DEFAULT_PORT = 9876
 # means the same thing here — the spin box floor is 1024, so EACCES cannot be the
 # "privileged port" case.
 _ADDR_IN_USE = frozenset({errno.EADDRINUSE, errno.EACCES, 10048, 10013})
-_RECV_CHUNK_SIZE = RECV_CHUNK_SIZE
-_MAX_MESSAGE_SIZE = MAX_MESSAGE_SIZE
-_HEADER_STRUCT = HEADER_STRUCT
 
 
 def _json_safe(value):
@@ -328,9 +325,9 @@ class QgisMCPServer(QObject):
         # PyQGIS execution on the network, where anyone who can route to the
         # port gets it. That is not a default anyone should be able to reach by
         # accident, so it requires an explicit token.
-        if str(self.host).lower() not in self._LOOPBACK_HOSTS and not os.environ.get(
-            "QGIS_MCP_TOKEN", ""
-        ).strip():
+        is_loopback = str(self.host).lower() in self._LOOPBACK_HOSTS
+        has_token = bool(os.environ.get("QGIS_MCP_TOKEN", "").strip())
+        if not is_loopback and not has_token:
             self.start_error = (
                 f"Refusing to bind {self.host}: a non-loopback address exposes "
                 "arbitrary code execution to the network. Set QGIS_MCP_TOKEN "
@@ -438,9 +435,7 @@ class QgisMCPServer(QObject):
         flushed by :meth:`_flush_outbound` on the next tick.
         """
         resp_bytes = json.dumps(_json_safe(response)).encode("utf-8")
-        buf = self.outbound.get(client_sock)
-        if buf is None:
-            buf = self.outbound[client_sock] = OutboundBuffer()
+        buf = self.outbound.setdefault(client_sock, OutboundBuffer())
         buf.append(frame(resp_bytes))
         if buf.flush(client_sock):
             # Fully written — drop the entry so the common case leaves nothing
@@ -449,10 +444,7 @@ class QgisMCPServer(QObject):
 
     def _flush_outbound(self):
         """Drain queued responses for every client with pending bytes."""
-        for client_sock in list(self.outbound):
-            buf = self.outbound.get(client_sock)
-            if buf is None or not buf.pending:
-                continue
+        for client_sock, buf in list(self.outbound.items()):
             try:
                 if buf.flush(client_sock):
                     self.outbound.pop(client_sock, None)
@@ -499,15 +491,15 @@ class QgisMCPServer(QObject):
             # Process each connected client
             for client_sock in list(self.clients):
                 try:
-                    data = client_sock.recv(_RECV_CHUNK_SIZE)
+                    data = client_sock.recv(RECV_CHUNK_SIZE)
                     if data:
                         buf = self.clients[client_sock] + data
-                        if len(buf) > _MAX_MESSAGE_SIZE:
+                        if len(buf) > MAX_MESSAGE_SIZE:
                             raise ValueError("Buffer exceeded 10 MB limit")
                         # Process complete length-prefixed messages
                         while len(buf) >= 4:
-                            msg_len = _HEADER_STRUCT.unpack(buf[:4])[0]
-                            if msg_len > _MAX_MESSAGE_SIZE:
+                            msg_len = HEADER_STRUCT.unpack(buf[:4])[0]
+                            if msg_len > MAX_MESSAGE_SIZE:
                                 raise ValueError(f"Message too large: {msg_len} bytes")
                             if len(buf) < 4 + msg_len:
                                 break  # Incomplete message
@@ -3919,9 +3911,10 @@ class QgisMCPServer(QObject):
             # Registered model ids carry a "model:" prefix, but callers see the
             # bare name in create_processing_model's response — accept both.
             if alg is None and isinstance(model, str) and not model.startswith("model:"):
-                alg = registry.algorithmById(f"model:{model}")
+                prefixed = f"model:{model}"
+                alg = registry.algorithmById(prefixed)
                 if alg is not None:
-                    model = f"model:{model}"
+                    model = prefixed
             target = model
 
         # Destination (sink/output) parameters have no default, so omitting one
