@@ -2230,7 +2230,7 @@ async def transform_coordinates(
 @mcp.tool(
     title="List Connections",
     annotations=ToolAnnotations(readOnlyHint=True),
-    description="List the data source connections saved in QGIS (PostGIS, GeoPackage, SpatiaLite, "
+    description="List the data source connections saved in QGIS (PostgreSQL, GeoPackage, SpatiaLite, "
     "MS SQL, Oracle, ...) — the Browser panel entries. Optionally filter by provider "
     "(e.g. 'postgres', 'ogr', 'spatialite'). Passwords are redacted from the URIs.",
     structured_output=True,
@@ -2242,10 +2242,44 @@ async def list_connections(
 
 
 @mcp.tool(
+    title="Create PostgreSQL Connection",
+    description="Validate and save a new PostgreSQL Browser-panel connection. Credentials must be held in "
+    "an existing QGIS Authentication Manager configuration; passwords are never accepted. Fails "
+    "if name already exists or the database cannot be reached. port must be the actual database "
+    "port supplied by the caller or user — this tool does not assume a default such as 5432. "
+    "ssl_mode is one of prefer (default), disable, allow, require, verify-ca, or verify-full.",
+    structured_output=True,
+)
+async def create_postgresql_connection(
+    ctx: Context,
+    name: str,
+    host: str,
+    port: int,
+    database: str,
+    auth_config_id: str,
+    ssl_mode: str = "prefer",
+    instance: str | None = None,
+) -> dict[str, Any]:
+    return await _send(
+        "create_postgresql_connection",
+        {
+            "name": name,
+            "host": host,
+            "port": port,
+            "database": database,
+            "auth_config_id": auth_config_id,
+            "ssl_mode": ssl_mode,
+        },
+        timeout=TIMEOUT_LONG,
+        instance=instance,
+    )
+
+
+@mcp.tool(
     title="List Connection Tables",
     annotations=ToolAnnotations(readOnlyHint=True),
     description="List tables reachable through a saved connection. On providers with schemas "
-    "(PostGIS), omit schema to get the schema list first, then pass one. Returns each table's "
+    "(PostgreSQL), omit schema to get the schema list first, then pass one. Returns each table's "
     "geometry column, CRS, primary key and kind.",
     structured_output=True,
 )
@@ -2303,7 +2337,7 @@ async def add_layer_from_connection(
     title="Import Layer to Connection",
     annotations=ToolAnnotations(destructiveHint=True),
     description="Write a loaded vector layer into a saved connection as a new table "
-    "(PostGIS, GeoPackage, ...). Fails if the table exists unless overwrite=true.",
+    "(PostgreSQL, GeoPackage, ...). Fails if the table exists unless overwrite=true.",
 )
 async def import_layer_to_connection(
     ctx: Context,
@@ -3059,7 +3093,7 @@ def llms_context_resource() -> str:
 
 ## Overview
 QGIS MCP connects QGIS Desktop to LLMs via the Model Context Protocol.
-117 tools for project management, layer operations, feature editing, styling, processing, and more.
+118 tools for project management, layer operations, feature editing, styling, processing, and more.
 
 ## Quick Start
 1. `ping` — verify connectivity
@@ -3102,7 +3136,7 @@ QGIS MCP connects QGIS Desktop to LLMs via the Model Context Protocol.
 - **Settings**: get_setting, set_setting
 - **Bookmarks**: get_bookmarks, add_bookmark, remove_bookmark
 - **Map Themes**: get_map_themes, add_map_theme, remove_map_theme, apply_map_theme
-- **Connections**: list_connections, list_connection_tables, add_layer_from_connection, import_layer_to_connection, execute_connection_sql (saved PostGIS/GeoPackage/... connections from the Browser panel)
+- **Connections**: list_connections, create_postgresql_connection, list_connection_tables, add_layer_from_connection, import_layer_to_connection, execute_connection_sql (saved PostgreSQL/GeoPackage/... connections from the Browser panel)
 
 ## Tips
 - **World basemap**: QGIS ships with a built-in world map. In the QGIS UI, \
@@ -3144,7 +3178,7 @@ currently reachable — a name that is not configured is rejected with the valid
 instances (default: unset = a single instance named "default" from QGIS_MCP_HOST/PORT)
 - QGIS_MCP_TOKEN — optional shared secret; when set, must match the plugin's value (default: unset = no auth)
 - QGIS_MCP_TRANSPORT — "stdio" (default) or "streamable-http"
-- QGIS_MCP_TOOL_MODE — "granular" (default, 117 tools) or "compound" (27 grouped tools)
+- QGIS_MCP_TOOL_MODE — "granular" (default, 118 tools) or "compound" (27 grouped tools)
 - QGIS_MCP_LOG_FILE — log file path (default: ~/.local/share/qgis-mcp/server.log)
 - QGIS_MCP_LOG_LEVEL — file log level (default: INFO)
 """

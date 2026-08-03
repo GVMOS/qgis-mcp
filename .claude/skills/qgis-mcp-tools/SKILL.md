@@ -3,7 +3,7 @@ name: qgis-mcp-tools
 description: Reference for all qgis-mcp MCP tools, resources, and prompts (names, titles, annotations, descriptions). Use when adding/modifying an MCP tool, explaining what a tool does, or checking tool annotations (readOnly/destructive/idempotent).
 ---
 
-# MCP Tools (117 total)
+# MCP Tools (118 total)
 
 | Tool | Title | Annotations | Description |
 |---|---|---|---|
@@ -93,7 +93,8 @@ description: Reference for all qgis-mcp MCP tools, resources, and prompts (names
 | `get_edit_status` | Get Edit Status | readOnly | Editable/modified flags, undo-redo availability, pending add/delete/change counts |
 | `undo_edits` | Undo Edits | — | Undo N steps on the layer's own undo stack |
 | `redo_edits` | Redo Edits | — | Redo N previously undone steps |
-| `list_connections` | List Connections | readOnly | Saved Browser-panel connections (PostGIS, GeoPackage, SpatiaLite, ...); passwords redacted |
+| `list_connections` | List Connections | readOnly | Saved Browser-panel connections (PostgreSQL, GeoPackage, SpatiaLite, ...); passwords redacted |
+| `create_postgresql_connection` | Create PostgreSQL Connection | — | Validate and save a PostgreSQL Browser-panel connection with an existing QGIS Authentication Manager configuration; passwords are never accepted, and the caller must supply the real database port instead of assuming `5432` |
 | `list_connection_tables` | List Connection Tables | readOnly | Schemas, then tables with geometry column, CRS, primary key and kind |
 | `add_layer_from_connection` | Add Layer from Connection | — | Load a connection table, or a database-side SQL query, as a layer (60s) |
 | `import_layer_to_connection` | Import Layer to Connection | destructive | Write a vector layer into a connection as a new table; `overwrite` elicits (60s) |
@@ -152,7 +153,7 @@ description: Reference for all qgis-mcp MCP tools, resources, and prompts (names
 - **MCP Logging**: Long-running tools (`execute_processing`, `render_map`, `execute_code`) and notable operations (`load_project`, `reload_plugin`) send `ctx.info()` status messages to the client.
 - **Elicitation**: Destructive tools (`remove_layer`, `delete_features`, `set_setting`, `execute_code`, `rollback_edits`, `execute_connection_sql`, `import_layer_to_connection` when `overwrite`) ask for user confirmation via `ctx.elicit()`. Commands whose tool always elicits are in `BATCH_BLOCKED_COMMANDS` so `batch` cannot bypass the prompt. Fail-open: proceeds if the client doesn't support elicitation (tools are already gated by `ToolAnnotations(destructiveHint=True)`).
 - **Completions**: `layer_id` arguments support auto-completion from available layers.
-- **Tool Titles**: All 117 tools have human-readable `title=` for better display in Claude Desktop / Cursor.
+- **Tool Titles**: All 118 tools have human-readable `title=` for better display in Claude Desktop / Cursor.
 - **Tool Annotations**: `readOnly`, `destructive`, `idempotent` hints via `ToolAnnotations`.
 - **Streamable HTTP**: Set `QGIS_MCP_TRANSPORT=streamable-http` for remote/multi-client support.
 - **Compound Tool Mode**: Set `QGIS_MCP_TOOL_MODE=compound` to replace the granular tools with 27 grouped tools (full parity: every granular command is reachable via an action), reducing schema overhead per LLM turn. Each compound tool takes `action` (str, required) plus `params` (object, optional) holding that action's parameters — e.g. `{"action": "load", "params": {"path": "/data/x.qgz"}}`. Handlers must never use `**kwargs`: FastMCP/pydantic cannot express variadic kwargs in JSON Schema and degrades them to a single required string (issue #24).

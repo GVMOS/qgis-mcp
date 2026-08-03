@@ -2854,6 +2854,38 @@ async def test_list_connections_filters_by_provider(mock_connection):
 
 
 @pytest.mark.asyncio
+async def test_create_postgresql_connection_uses_auth_config_and_long_timeout(mock_connection):
+    from qgis_mcp.server import create_postgresql_connection
+
+    mock_connection.send_command.return_value = {
+        "status": "success",
+        "result": {"ok": True, "name": "warehouse", "validated": True},
+    }
+    output = await create_postgresql_connection(
+        _make_ctx(),
+        name="warehouse",
+        host="db.example.test",
+        port=5433,
+        database="gis",
+        auth_config_id="authcfg1",
+        ssl_mode="verify-full",
+    )
+    assert output == {"ok": True, "name": "warehouse", "validated": True}
+    mock_connection.send_command.assert_called_once_with(
+        "create_postgresql_connection",
+        {
+            "name": "warehouse",
+            "host": "db.example.test",
+            "port": 5433,
+            "database": "gis",
+            "auth_config_id": "authcfg1",
+            "ssl_mode": "verify-full",
+        },
+        timeout=60,
+    )
+
+
+@pytest.mark.asyncio
 async def test_add_layer_from_connection_returns_resource_link(mock_connection):
     from qgis_mcp.server import add_layer_from_connection
 

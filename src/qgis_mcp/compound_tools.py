@@ -478,10 +478,15 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
     @mcp.tool(
         title="Connection",
         description=(
-            "Saved data source connections (PostGIS, GeoPackage, SpatiaLite, MS SQL, ...) — "
+            "Saved data source connections (PostgreSQL, GeoPackage, SpatiaLite, MS SQL, ...) — "
             "the QGIS Browser panel entries.\n"
-            "Actions: list, list_tables, add_layer, import_layer, execute_sql\n"
+            "Actions: list, create, list_tables, add_layer, import_layer, execute_sql\n"
             "- list: provider (str, optional filter, e.g. 'postgres', 'ogr')\n"
+            "- create: PostgreSQL only — name, host, port, database, auth_config_id (all required); "
+            "port has no default and must be the actual database port supplied by the caller or user "
+            "(do not assume 5432). ssl_mode (str, default 'prefer': "
+            "prefer|disable|allow|require|verify-ca|verify-full). Uses an existing QGIS "
+            "Authentication Manager configuration and validates before saving\n"
             "- list_tables: provider (str), connection (str), schema (str, optional — omit on "
             "schema-aware providers to get the schema list first)\n"
             "- add_layer: provider (str), connection (str), table (str) + schema (str, optional), "
@@ -501,6 +506,19 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
         kwargs = params or {}
         if action == "list":
             return await _send("list_connections", {"provider": kwargs.get("provider")})
+        elif action == "create":
+            return await _send(
+                "create_postgresql_connection",
+                {
+                    "name": kwargs["name"],
+                    "host": kwargs["host"],
+                    "port": kwargs["port"],
+                    "database": kwargs["database"],
+                    "auth_config_id": kwargs["auth_config_id"],
+                    "ssl_mode": kwargs.get("ssl_mode", "prefer"),
+                },
+                timeout=TIMEOUT_LONG,
+            )
         elif action == "list_tables":
             return await _send(
                 "list_connection_tables",
