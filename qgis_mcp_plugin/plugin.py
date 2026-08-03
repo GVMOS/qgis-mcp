@@ -3682,12 +3682,13 @@ class QgisMCPServer(QObject):
             raise Exception("PostgreSQL database must not be empty")
         if not auth_config_id:
             raise Exception("Authentication configuration ID must not be empty")
+        port_error = "PostgreSQL port must be an integer from 1 to 65535"
         try:
             port = int(port)
         except (TypeError, ValueError) as exc:
-            raise Exception("PostgreSQL port must be an integer from 1 to 65535") from exc
+            raise Exception(port_error) from exc
         if not 1 <= port <= 65535:
-            raise Exception("PostgreSQL port must be an integer from 1 to 65535")
+            raise Exception(port_error)
 
         normalized_ssl_mode = str(ssl_mode).strip().lower().replace("_", "-")
         ssl_value = self._POSTGRESQL_SSL_MODES.get(normalized_ssl_mode)
