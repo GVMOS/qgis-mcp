@@ -7,6 +7,11 @@
 # W503 (line break before binary operator): the QGIS checker flags it even
 # though Black/ruff produce it. Resolve by refactoring the boolean onto fewer
 # lines (extract sub-expressions) rather than breaking across the operator.
+#
+# E203 (whitespace before ':'): `ruff format` writes `buf[4 : 4 + n]` whenever a
+# slice bound is an expression. Bind the bound to a name first (`buf[4:end]`) so
+# the formatter leaves it alone — that keeps `ruff format .` and this check from
+# fighting, which is why the plugin needs no formatter exclude.
 [flake8]
 max-line-length = 120
 extend-select = W503

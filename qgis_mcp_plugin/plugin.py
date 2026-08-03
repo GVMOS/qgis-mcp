@@ -501,10 +501,11 @@ class QgisMCPServer(QObject):
                             msg_len = HEADER_STRUCT.unpack(buf[:4])[0]
                             if msg_len > MAX_MESSAGE_SIZE:
                                 raise ValueError(f"Message too large: {msg_len} bytes")
-                            if len(buf) < 4 + msg_len:
+                            msg_end = 4 + msg_len
+                            if len(buf) < msg_end:
                                 break  # Incomplete message
-                            msg_bytes = buf[4:4 + msg_len]
-                            buf = buf[4 + msg_len:]
+                            msg_bytes = buf[4:msg_end]
+                            buf = buf[msg_end:]
                             try:
                                 command = json.loads(msg_bytes.decode("utf-8"))
                             except (json.JSONDecodeError, UnicodeDecodeError) as e:
@@ -968,7 +969,8 @@ class QgisMCPServer(QObject):
         project = QgsProject.instance()
         all_layers = list(project.mapLayers().items())
         total_count = len(all_layers)
-        page = all_layers[offset:offset + limit]
+        page_end = offset + limit
+        page = all_layers[offset:page_end]
 
         layers = []
         for layer_id, layer in page:
@@ -1471,8 +1473,7 @@ class QgisMCPServer(QObject):
                 if idx < 0:
                     names = [fld.name() for fld in layer.fields()]
                     raise Exception(
-                        f"Feature {i}: no field '{field_name}' in layer "
-                        f"(fields: {names})"
+                        f"Feature {i}: no field '{field_name}' in layer (fields: {names})"
                     )
                 f.setAttribute(idx, value)
             wkt = feat_data.get("geometry_wkt")
@@ -1769,9 +1770,7 @@ class QgisMCPServer(QObject):
         try:
             return mapping[key]
         except KeyError:
-            raise Exception(
-                f"Unknown {label}: {key!r}. Use one of {sorted(mapping)}"
-            ) from None
+            raise Exception(f"Unknown {label}: {key!r}. Use one of {sorted(mapping)}") from None
 
     def _band_range(self, provider, band, min_value, max_value):
         """Resolve a band's min/max, falling back to its statistics."""
@@ -1832,9 +1831,7 @@ class QgisMCPServer(QObject):
             shader = QgsRasterShader()
             shader.setRasterShaderFunction(shader_fn)
             renderer = QgsSingleBandPseudoColorRenderer(provider, band, shader)
-            applied.update(
-                band=band, min=lo, max=hi, color_ramp=color_ramp, classes=int(classes)
-            )
+            applied.update(band=band, min=lo, max=hi, color_ramp=color_ramp, classes=int(classes))
 
         elif style_type == "singleband_gray":
             band = check_band(band, "band")
@@ -1880,7 +1877,9 @@ class QgisMCPServer(QObject):
             renderer = QgsHillshadeRenderer(provider, band, float(azimuth), float(altitude))
             renderer.setZFactor(float(z_factor))
             applied.update(
-                band=band, azimuth=float(azimuth), altitude=float(altitude),
+                band=band,
+                azimuth=float(azimuth),
+                altitude=float(altitude),
                 z_factor=float(z_factor),
             )
 
@@ -2025,9 +2024,9 @@ class QgisMCPServer(QObject):
             return alg.id()
 
         hint_lower = hint_clean.lower()
-        exact_name = []   # display name == hint
-        suffix_id = []    # id suffix == hint (after ':')
-        contains = []     # display name or id suffix contains hint
+        exact_name = []  # display name == hint
+        suffix_id = []  # id suffix == hint (after ':')
+        contains = []  # display name or id suffix contains hint
         for alg in registry.algorithms():
             alg_id = alg.id()
             id_suffix = alg_id.split(":", 1)[-1].lower()
@@ -2061,11 +2060,12 @@ class QgisMCPServer(QObject):
         # Show up to 8 candidates so the LLM can disambiguate next call.
         sample = ", ".join(
             f"{a.id()} ({a.displayName()})"
-            for a in sorted(all_candidates, key=lambda a: (a.provider().id() != "native", len(a.id())))[:8]
+            for a in sorted(
+                all_candidates, key=lambda a: (a.provider().id() != "native", len(a.id()))
+            )[:8]
         )
         raise Exception(
-            f"Algorithm hint '{hint_clean}' is ambiguous. Candidates: {sample}. "
-            "Use the full id."
+            f"Algorithm hint '{hint_clean}' is ambiguous. Candidates: {sample}. Use the full id."
         )
 
     def _build_param_source(self, value, defined_inputs, defined_steps):
@@ -2208,9 +2208,7 @@ class QgisMCPServer(QObject):
             except Exception:
                 models_dir = None
         if models_dir is None:
-            models_dir = os.path.join(
-                QgsApplication.qgisSettingsDirPath(), "processing", "models"
-            )
+            models_dir = os.path.join(QgsApplication.qgisSettingsDirPath(), "processing", "models")
         os.makedirs(models_dir, exist_ok=True)
 
         final_name = name
@@ -2225,8 +2223,7 @@ class QgisMCPServer(QObject):
                     break
             else:
                 raise Exception(
-                    f"Could not find a unique name for '{name}' in {models_dir} "
-                    "(tried up to _1000)"
+                    f"Could not find a unique name for '{name}' in {models_dir} (tried up to _1000)"
                 )
 
         # ---- Build model skeleton ----
@@ -2271,7 +2268,7 @@ class QgisMCPServer(QObject):
                 raise Exception(f"Step '{step['id']}': {e}") from e
             alg = registry.algorithmById(alg_id)
             valid_params = {p.name() for p in alg.parameterDefinitions()}
-            for pname in (step.get("parameters") or {}):
+            for pname in step.get("parameters") or {}:
                 if pname not in valid_params:
                     raise Exception(
                         f"Step '{step['id']}' (algorithm '{alg_id}'): unknown parameter "
@@ -2306,7 +2303,9 @@ class QgisMCPServer(QObject):
         for step_idx, (step, alg_id) in enumerate(resolved):
             child = QgsProcessingModelChildAlgorithm(alg_id)
             child.setChildId(step["id"])
-            child.setDescription(step.get("description") or registry.algorithmById(alg_id).displayName())
+            child.setDescription(
+                step.get("description") or registry.algorithmById(alg_id).displayName()
+            )
             child.setPosition(QPointF(300.0 + step_idx * 250.0, 50.0))
 
             for pname, pvalue in (step.get("parameters") or {}).items():
@@ -2336,7 +2335,11 @@ class QgisMCPServer(QObject):
             last_child = model.childAlgorithm(last_step_id)
             last_alg = registry.algorithmById(last_child.algorithmId())
             output_names = [o.name() for o in last_alg.outputDefinitions()] if last_alg else []
-            preferred = "OUTPUT" if "OUTPUT" in output_names else (output_names[0] if output_names else None)
+            preferred = (
+                "OUTPUT"
+                if "OUTPUT" in output_names
+                else (output_names[0] if output_names else None)
+            )
             if preferred:
                 mo = QgsProcessingModelOutput("Result")
                 mo.setChildId(last_step_id)
@@ -2362,6 +2365,7 @@ class QgisMCPServer(QObject):
         QgsMessageLog.logMessage(
             f"Processing model '{final_name}' saved to {target_path}", self.LOG_TAG, MSG_INFO
         )
+        output_count = sum(len(v) for v in outputs_by_step.values()) or (1 if defined_steps else 0)
         return {
             "ok": True,
             "name": final_name,
@@ -2370,7 +2374,7 @@ class QgisMCPServer(QObject):
             "registered": registered,
             "input_count": len(defined_inputs),
             "step_count": len(defined_steps),
-            "output_count": sum(len(v) for v in outputs_by_step.values()) or (1 if defined_steps else 0),
+            "output_count": output_count,
             # Echo the resolved algorithm ids so the caller can confirm fuzzy matches.
             "resolved_steps": [
                 {"id": step["id"], "algorithm": alg_id, "hint": step["algorithm"]}
@@ -2729,9 +2733,7 @@ class QgisMCPServer(QObject):
                 "View > 3D Map Views > New 3D Map View, frame your scene, then retry."
             )
         if view_index < 0 or view_index >= len(views):
-            raise ValueError(
-                f"view_index {view_index} out of range (open 3D views: {len(views)})"
-            )
+            raise ValueError(f"view_index {view_index} out of range (open 3D views: {len(views)})")
         canvas3d = views[view_index]
 
         # Clone the scene settings (copy constructor) so the live view is never
@@ -2893,7 +2895,9 @@ class QgisMCPServer(QObject):
             result["placement"] = str(settings.placement)
         return result
 
-    def set_layer_labeling(self, layer_id, enabled=True, field_name=None, font_size=None, color=None, **kwargs):
+    def set_layer_labeling(
+        self, layer_id, enabled=True, field_name=None, font_size=None, color=None, **kwargs
+    ):
         """Configure labeling for a vector layer."""
         from qgis.core import QgsPalLayerSettings, QgsTextFormat, QgsVectorLayerSimpleLabeling
 
@@ -2955,18 +2959,20 @@ class QgisMCPServer(QObject):
         bookmarks = []
         for b in bm.bookmarks():
             extent = b.extent()
-            bookmarks.append({
-                "id": b.id(),
-                "name": b.name(),
-                "group": b.group(),
-                "extent": {
-                    "xmin": extent.xMinimum(),
-                    "ymin": extent.yMinimum(),
-                    "xmax": extent.xMaximum(),
-                    "ymax": extent.yMaximum(),
-                },
-                "crs": extent.crs().authid() if extent.crs().isValid() else None,
-            })
+            bookmarks.append(
+                {
+                    "id": b.id(),
+                    "name": b.name(),
+                    "group": b.group(),
+                    "extent": {
+                        "xmin": extent.xMinimum(),
+                        "ymin": extent.yMinimum(),
+                        "xmax": extent.xMaximum(),
+                        "ymax": extent.yMaximum(),
+                    },
+                    "crs": extent.crs().authid() if extent.crs().isValid() else None,
+                }
+            )
         return {"bookmarks": bookmarks, "count": len(bookmarks)}
 
     def add_bookmark(self, name, xmin, ymin, xmax, ymax, crs="EPSG:4326", group="", **kwargs):
@@ -2999,11 +3005,13 @@ class QgisMCPServer(QObject):
         result = []
         for name in themes:
             layer_ids = collection.mapThemeVisibleLayerIds(name)
-            result.append({
-                "name": name,
-                "visible_layer_count": len(layer_ids),
-                "visible_layer_ids": layer_ids,
-            })
+            result.append(
+                {
+                    "name": name,
+                    "visible_layer_count": len(layer_ids),
+                    "visible_layer_ids": layer_ids,
+                }
+            )
         return {"themes": result, "count": len(result)}
 
     def add_map_theme(self, name, **kwargs):
@@ -3320,9 +3328,7 @@ class QgisMCPServer(QObject):
         bar.attemptMove(QgsLayoutPoint(x, y))
         return {"ok": True, "uuid": bar.uuid()}
 
-    def add_layout_picture(
-        self, layout_name, path, x=10, y=10, width=30, height=30, **kwargs
-    ):
+    def add_layout_picture(self, layout_name, path, x=10, y=10, width=30, height=30, **kwargs):
         """Add a picture/SVG (logo, north arrow) to a print layout."""
         from qgis.core import QgsLayoutItemPicture
 
@@ -3457,7 +3463,9 @@ class QgisMCPServer(QObject):
             # other layer type) makes the whole definition invalid.
             if lyr.type() != LAYER_VECTOR:
                 if explicit:
-                    raise Exception(f"Layer '{lyr.name()}' is not a vector layer — cannot be queried")
+                    raise Exception(
+                        f"Layer '{lyr.name()}' is not a vector layer — cannot be queried"
+                    )
                 continue
             definition.addSource(lyr.name(), lid)
             sources.append(lyr.name())
@@ -3496,9 +3504,7 @@ class QgisMCPServer(QObject):
         exp = QgsExpression(expression)
         context = QgsExpressionContext()
         context.appendScope(QgsExpressionContextUtils.globalScope())
-        context.appendScope(
-            QgsExpressionContextUtils.projectScope(QgsProject.instance())
-        )
+        context.appendScope(QgsExpressionContextUtils.projectScope(QgsProject.instance()))
         if layer_id:
             layer = self._get_vector_layer(layer_id)
             context.appendScope(QgsExpressionContextUtils.layerScope(layer))
@@ -3509,9 +3515,7 @@ class QgisMCPServer(QObject):
             raise Exception(f"Eval error: {exp.evalErrorString()}")
         return {"expression": expression, "result": value}
 
-    def identify_features(
-        self, point, tolerance=0.0, layer_ids=None, limit=10, **kwargs
-    ):
+    def identify_features(self, point, tolerance=0.0, layer_ids=None, limit=10, **kwargs):
         """Identify features at a point [x, y] (project CRS) across layers."""
         project = QgsProject.instance()
         x, y = float(point[0]), float(point[1])
@@ -3519,12 +3523,8 @@ class QgisMCPServer(QObject):
         if layer_ids:
             targets = [project.mapLayer(lid) for lid in layer_ids]
         else:
-            targets = [
-                n.layer() for n in project.layerTreeRoot().findLayers() if n.isVisible()
-            ]
-        prefilter = QgsRectangle(
-            x - tolerance, y - tolerance, x + tolerance, y + tolerance
-        )
+            targets = [n.layer() for n in project.layerTreeRoot().findLayers() if n.isVisible()]
+        prefilter = QgsRectangle(x - tolerance, y - tolerance, x + tolerance, y + tolerance)
         results = []
         for layer in targets:
             if layer is None or layer.type() != LAYER_VECTOR:
@@ -3889,9 +3889,7 @@ class QgisMCPServer(QObject):
         models = []
         for alg in registry.algorithms():
             if alg.provider().id() == "model":
-                models.append(
-                    {"id": alg.id(), "name": alg.displayName(), "group": alg.group()}
-                )
+                models.append({"id": alg.id(), "name": alg.displayName(), "group": alg.group()})
         return {"models": models, "count": len(models)}
 
     def run_model(self, model, parameters=None, **kwargs):
@@ -3997,7 +3995,13 @@ class QgisMCPServer(QObject):
         rows = ref.height()
         try:
             calc = QgsRasterCalculator(
-                expression, output_path, "GTiff", extent, cols, rows, entries,
+                expression,
+                output_path,
+                "GTiff",
+                extent,
+                cols,
+                rows,
+                entries,
                 project.transformContext(),
             )
         except TypeError:
@@ -4010,8 +4014,14 @@ class QgisMCPServer(QObject):
         return {"ok": True, "output": output_path, "reference_layer": ref.name()}
 
     def zonal_statistics(
-        self, polygon_layer, raster_layer, band=1, prefix="_", stats=None,
-        output_path=None, **kwargs,
+        self,
+        polygon_layer,
+        raster_layer,
+        band=1,
+        prefix="_",
+        stats=None,
+        output_path=None,
+        **kwargs,
     ):
         """Per-polygon raster statistics (native:zonalstatisticsfb).
 
@@ -4042,9 +4052,7 @@ class QgisMCPServer(QObject):
             p = QgsPointXY(pt[0], pt[1])
             if band:
                 val, ok = dp.sample(p, band)
-                results.append(
-                    {"x": pt[0], "y": pt[1], "band": band, "value": val if ok else None}
-                )
+                results.append({"x": pt[0], "y": pt[1], "band": band, "value": val if ok else None})
             else:
                 vals = {}
                 for b in range(1, layer.bandCount() + 1):
@@ -4102,8 +4110,14 @@ class QgisMCPServer(QObject):
     # ------------------------------------------------------------------
 
     def field_calculator(
-        self, layer_id, field_name, expression, field_type="double",
-        length=0, precision=0, **kwargs,
+        self,
+        layer_id,
+        field_name,
+        expression,
+        field_type="double",
+        length=0,
+        precision=0,
+        **kwargs,
     ):
         """Add (if missing) and populate a field from a QGIS expression, in-place."""
         layer = self._get_vector_layer(layer_id)
@@ -4161,8 +4175,15 @@ class QgisMCPServer(QObject):
         return {"field": field, "values": values, "count": len(values)}
 
     def spatial_join(
-        self, target_layer, join_layer, predicates=None, join_fields=None,
-        method=1, prefix="", output_path=None, **kwargs,
+        self,
+        target_layer,
+        join_layer,
+        predicates=None,
+        join_fields=None,
+        method=1,
+        prefix="",
+        output_path=None,
+        **kwargs,
     ):
         """Join attributes by location (native:joinattributesbylocation).
 
@@ -4243,11 +4264,7 @@ def _client_config_registry(repo_dir):
     opencode_cfg = home / ".config" / "opencode" / "opencode.json"
 
     # Hermes desktop app (Windows) - YAML-based config, handled as print_only
-    hermes_cfg = (
-        appdata / "Hermes" / "config.yaml"
-        if sys.platform == "win32" and appdata
-        else None
-    )
+    hermes_cfg = appdata / "Hermes" / "config.yaml" if sys.platform == "win32" and appdata else None
 
     # Clients sharing Claude Desktop's mcpServers + command/args schema.
     kimi_cfg = Path(os.environ.get("KIMI_CODE_HOME", home / ".kimi-code")) / "mcp.json"
@@ -4274,8 +4291,7 @@ def _client_config_registry(repo_dir):
 
 
 def _qgis_entry_command_args(entry):
-    """Return (command, args) for a 'qgis' server entry.
-    """
+    """Return (command, args) for a 'qgis' server entry."""
     if not isinstance(entry, dict):
         return None, []
     cmd = entry.get("command")
@@ -4296,7 +4312,8 @@ def _remove_refresh_from_entry(entry):
     args = cmd.get("args", []) if isinstance(cmd, dict) else entry.get("args", [])
     try:
         idx = args.index("--refresh-package")
-        del args[idx:idx + 2]
+        end = idx + 2  # the flag and its value
+        del args[idx:end]
     except ValueError:
         pass
     if isinstance(cmd, dict):
@@ -4372,9 +4389,19 @@ class MCPConfiguratorDialog(QDialog):
         self.client_combo = QComboBox()
         self.client_combo.addItems(
             [
-                "claude-code", "claude-desktop", "copilot-cli", "cursor", "gemini",
-                "hermes", "kimi", "lmstudio", "opencode", "qwen", "vscode",
-                "windsurf", "zed",
+                "claude-code",
+                "claude-desktop",
+                "copilot-cli",
+                "cursor",
+                "gemini",
+                "hermes",
+                "kimi",
+                "lmstudio",
+                "opencode",
+                "qwen",
+                "vscode",
+                "windsurf",
+                "zed",
             ]
         )
         self.client_combo.setMinimumWidth(180)
@@ -4484,10 +4511,12 @@ class MCPConfiguratorDialog(QDialog):
         if uv:
             return uv
         if sys.platform == "win32":
+            localappdata = Path(os.environ.get("LOCALAPPDATA", ""))
+            userprofile = Path(os.environ.get("USERPROFILE", ""))
             candidates = [
-                Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "WinGet" / "Links" / "uv.exe",
-                Path(os.environ.get("USERPROFILE", "")) / ".local" / "bin" / "uv.exe",
-                Path(os.environ.get("USERPROFILE", "")) / ".cargo" / "bin" / "uv.exe",
+                localappdata / "Microsoft" / "WinGet" / "Links" / "uv.exe",
+                userprofile / ".local" / "bin" / "uv.exe",
+                userprofile / ".cargo" / "bin" / "uv.exe",
             ]
             for p in candidates:
                 if p.exists():
@@ -4520,8 +4549,11 @@ class MCPConfiguratorDialog(QDialog):
                 entry = {
                     "command": uv,
                     "args": [
-                        "--directory", str(self.repo_dir),
-                        "run", "--no-sync", "src/qgis_mcp/server.py",
+                        "--directory",
+                        str(self.repo_dir),
+                        "run",
+                        "--no-sync",
+                        "src/qgis_mcp/server.py",
                     ],
                 }
             else:
@@ -4558,7 +4590,9 @@ class MCPConfiguratorDialog(QDialog):
             launch_cmd = f'uvx --from "{self.github_url}" qgis-mcp-server'
         else:
             uv = self._find_uv() or "uv"
-            launch_cmd = f'"{uv}" --directory "{self.repo_dir}" run --no-sync src/qgis_mcp/server.py'
+            launch_cmd = (
+                f'"{uv}" --directory "{self.repo_dir}" run --no-sync src/qgis_mcp/server.py'
+            )
 
         bat_lines = [
             "@echo off",
@@ -4572,12 +4606,7 @@ class MCPConfiguratorDialog(QDialog):
         bat_content = "\n".join(bat_lines)
 
         bat_escaped = str(bat_path).replace("\\", "\\\\")
-        yaml_block = (
-            "mcpServers:\n"
-            "  qgis:\n"
-            f'    command: "{bat_escaped}"\n'
-            "    args: []"
-        )
+        yaml_block = f'mcpServers:\n  qgis:\n    command: "{bat_escaped}"\n    args: []'
 
         return (
             f"Step 1 — Create this file:\n"
@@ -4612,7 +4641,7 @@ class MCPConfiguratorDialog(QDialog):
             else:
                 uv = self._find_uv() or "uv"
                 cmd = (
-                    f'claude mcp add -s user qgis -- '
+                    f"claude mcp add -s user qgis -- "
                     f'"{uv}" --directory "{self.repo_dir}" run --no-sync src/qgis_mcp/server.py'
                 )
             self.preview_label.setText("Run this command in your terminal:")
@@ -4636,9 +4665,7 @@ class MCPConfiguratorDialog(QDialog):
                 self.status_label.setStyleSheet("color: orange;")
             else:
                 cfg_hint = str(hermes_cfg) if hermes_cfg else "%APPDATA%\\Hermes\\config.yaml"
-                self.status_label.setText(
-                    f"Status: Follow the steps below, then edit {cfg_hint}"
-                )
+                self.status_label.setText(f"Status: Follow the steps below, then edit {cfg_hint}")
                 self.status_label.setStyleSheet("color: gray;")
             self.apply_btn.setEnabled(False)
             self.update_preview()
@@ -4790,7 +4817,9 @@ class QgisMCPPlugin:
         self.tool_button.setToolButtonStyle(TOOLBUTTON_ICON_ONLY)
         self._toolbar_action = toolbar.addWidget(self.tool_button)
 
-        self.help_action = QAction(self._logo_icon(), "MCP Setup Configurator", self.iface.mainWindow())
+        self.help_action = QAction(
+            self._logo_icon(), "MCP Setup Configurator", self.iface.mainWindow()
+        )
         self.help_action.triggered.connect(self._show_help)
 
         self.iface.addPluginToMenu("QGIS MCP", self.action)
