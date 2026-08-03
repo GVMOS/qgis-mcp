@@ -515,19 +515,67 @@ class LayerHandlers:
         "wfs": (QgsVectorLayer, "WFS", "WFS Layer", ""),
     }
 
+    # How a service takes a CRS in its provider uri. A service missing from this
+    # table has no say in it: XYZ is a Web Mercator tile scheme and the wms
+    # provider ignores `crs=` for `type=xyz` (verified on QGIS 4.0 — the layer
+    # comes back EPSG:3857 whatever you ask for), which is exactly why this
+    # parameter used to be accepted and then silently dropped.
+    _WEB_CRS_URI: ClassVar[dict] = {
+        "wms": "crs={crs}&",
+        "wfs": "srsname='{crs}' ",
+    }
+    _WEB_FIXED_CRS = "EPSG:3857"
+
+    def _web_layer_uri(self, service, url, crs, prefix):
+        """Build the provider uri, applying *crs* where the service accepts one."""
+        uri = prefix + url
+        if not crs:
+            return uri
+        if not QgsCoordinateReferenceSystem(crs).isValid():
+            raise CommandError(f"Invalid CRS: {crs}")
+        template = self._WEB_CRS_URI.get(service)
+        if template is None:
+            # Refuse rather than hand back a layer that is not in the requested
+            # CRS: silently ignoring the argument is the bug being fixed here.
+            if crs.upper() != self._WEB_FIXED_CRS:
+                raise CommandError(
+                    f"{service} tile layers are always {self._WEB_FIXED_CRS} (Web Mercator "
+                    f"tile scheme), so crs={crs!r} cannot be honoured. Omit crs, or reproject "
+                    "the map instead by setting the project CRS."
+                )
+            return uri
+        if f"{template.split('=')[0]}=" in url:
+            return uri  # the caller's own uri already specifies it
+        return template.format(crs=crs) + uri
+
     @command
-    def add_web_layer(self, url, service, name=None, crs="EPSG:3857", **kwargs):
-        """Add a web layer (XYZ, WMS, WFS) to the project."""
+    def add_web_layer(self, url, service, name=None, crs=None, **kwargs):
+        """Add a web layer (XYZ, WMS, WFS) to the project.
+
+        *crs* defaults to unset, and only a CRS the caller actually asks for is
+        written into the uri. Injecting one by default would override whatever a
+        WMS serves natively — which is why the old ``EPSG:3857`` default could
+        not have been applied even in principle.
+        """
+        service = service.lower()
         layer_class, provider, default_name, prefix = self._pick(
-            self._WEB_SERVICES, service.lower(), "web service"
+            self._WEB_SERVICES, service, "web service"
         )
-        layer = layer_class(prefix + url, name or default_name, provider)
+        uri = self._web_layer_uri(service, url, crs, prefix)
+        layer = layer_class(uri, name or default_name, provider)
 
         if not layer.isValid():
             raise CommandError(f"Layer is not valid: {url}")
 
         QgsProject.instance().addMapLayer(layer)
-        return {"id": layer.id(), "name": layer.name(), "type": self._get_layer_type(layer)}
+        # Report the CRS the layer actually got, so a caller can see what the
+        # service agreed to rather than assuming the requested value stuck.
+        return {
+            "id": layer.id(),
+            "name": layer.name(),
+            "type": self._get_layer_type(layer),
+            "crs": layer.crs().authid(),
+        }
 
     @command
     def add_table_join(

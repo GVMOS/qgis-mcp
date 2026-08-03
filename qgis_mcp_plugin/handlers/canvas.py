@@ -134,6 +134,8 @@ class CanvasHandlers:
 
             return {"base64_data": b64, "mime_type": "image/png", "width": width, "height": height}
 
+        except CommandError:
+            raise  # the render timeout above — don't re-wrap a deliberate message
         except Exception as e:
             raise CommandError(f"Render error: {e!s}") from e
 

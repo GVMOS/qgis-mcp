@@ -114,6 +114,11 @@ class ProcessingHandlers:
                     "or run heavy raster work with GDAL outside QGIS."
                 )
             return {"algorithm": algorithm, "result": {k: str(v) for k, v in result.items()}}
+        except CommandError:
+            # Already a deliberate, user-facing message (the timeout above).
+            # Re-wrapping it produced "Processing error: Processing cancelled
+            # after 55s...", which reads like the timeout was itself a failure.
+            raise
         except Exception as e:
             raise CommandError(f"Processing error: {e!s}") from e
 

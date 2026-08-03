@@ -1026,3 +1026,43 @@ def test_create_postgresql_connection_rejects_unknown_auth_config(client):
     connections = client.send_command("list_connections", {"provider": "postgres"})
     assert connections["status"] == "success"
     assert name not in {entry["name"] for entry in connections["result"]["connections"]}
+
+
+def test_add_web_layer_crs_is_applied_or_refused(client):
+    """The crs argument used to be accepted and silently dropped.
+
+    XYZ is a Web Mercator tile scheme and the provider ignores `crs=` in the uri,
+    so asking for anything else is now an error instead of a layer that quietly
+    is not in the requested CRS. A dummy tile URL is enough: the wms provider
+    validates the uri without fetching a tile.
+    """
+    url = "https://tiles.invalid/{z}/{x}/{y}.png"
+    added = client.send_command(
+        "add_web_layer", {"url": url, "service": "xyz", "name": "live xyz probe"}
+    )
+    assert added["status"] == "success", added.get("message")
+    # The response reports the CRS the layer actually got, not the one requested.
+    assert added["result"]["crs"] == "EPSG:3857"
+    layer_ids = [added["result"]["id"]]
+    try:
+        # Explicitly asking for the CRS it already is stays a no-op success.
+        same = client.send_command(
+            "add_web_layer", {"url": url, "service": "xyz", "crs": "EPSG:3857"}
+        )
+        assert same["status"] == "success", same.get("message")
+        layer_ids.append(same["result"]["id"])
+
+        conflicting = client.send_command(
+            "add_web_layer", {"url": url, "service": "xyz", "crs": "EPSG:2154"}
+        )
+        assert conflicting["status"] == "error"
+        assert "always EPSG:3857" in conflicting["message"]
+
+        nonsense = client.send_command(
+            "add_web_layer", {"url": url, "service": "xyz", "crs": "EPSG:notacrs"}
+        )
+        assert nonsense["status"] == "error"
+        assert "Invalid CRS" in nonsense["message"]
+    finally:
+        for layer_id in layer_ids:
+            client.send_command("remove_layer", {"layer_id": layer_id})

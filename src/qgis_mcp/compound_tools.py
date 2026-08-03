@@ -155,8 +155,9 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
             "field_name (str, optional), font_size (float, optional), color (str, optional)\n"
             "- duplicate: layer_id (str), new_name (str, optional)\n"
             "- set_order: layer_ids (list[str]) — top to bottom\n"
-            "- add_web: url (str), service (str: 'xyz', 'wms', 'wmts', 'wfs'), "
-            "name (str, optional), crs (str, default 'EPSG:3857')\n"
+            "- add_web: url (str), service (str: 'xyz', 'wms', 'wfs'), name (str, optional), "
+            "crs (str, optional — only for wms/wfs; XYZ tiles are always EPSG:3857 and "
+            "requesting another CRS is an error)\n"
             "- export: layer_id (str), output_path (str) — format from extension "
             "(.gpkg/.shp/.geojson/.tif); target_crs (str, optional) reprojects, "
             "filter_expression (str, optional) exports a subset\n"
@@ -261,10 +262,10 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
             web_params: dict[str, Any] = {
                 "url": kwargs["url"],
                 "service": kwargs["service"],
-                "crs": kwargs.get("crs", "EPSG:3857"),
             }
-            if "name" in kwargs:
-                web_params["name"] = kwargs["name"]
+            for key in ("crs", "name"):
+                if kwargs.get(key):
+                    web_params[key] = kwargs[key]
             result = await _send("add_web_layer", web_params)
             return make_layer_response(result)
         elif action == "export":

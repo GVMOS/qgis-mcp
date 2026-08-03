@@ -141,3 +141,58 @@ def test_dispatch_only_reaches_decorated_handlers():
     assert re.search(r"getattr\(self, cmd_type\)", dispatch), (
         "_dispatch is expected to resolve the handler with getattr after the COMMANDS check"
     )
+
+
+def _raises_command_error(node):
+    """True for `raise CommandError(...)` / `raise LayerNotFound(...)` and friends."""
+    exc = node.exc
+    if isinstance(exc, ast.Call):
+        exc = exc.func
+    name = getattr(exc, "id", None) or getattr(exc, "attr", None)
+    return name in ("CommandError", "LayerNotFound", "WrongLayerType")
+
+
+def _has_command_error_raise(*roots):
+    """True when any node under *roots* is `raise CommandError(...)`-like."""
+    for root in roots:
+        for node in ast.walk(root):
+            if not isinstance(node, ast.Raise) or node.exc is None:
+                continue
+            if _raises_command_error(node):
+                return True
+    return False
+
+
+def _catches(handler, *names):
+    caught = handler.type
+    if caught is None:
+        return "Exception" in names  # bare `except:` behaves like except Exception
+    parts = caught.elts if isinstance(caught, ast.Tuple) else [caught]
+    return any((getattr(p, "id", None) or getattr(p, "attr", None)) in names for p in parts)
+
+
+def test_deliberate_command_errors_are_not_rewrapped():
+    """A `try` that raises CommandError itself must re-raise it before the catch-all.
+
+    ``except Exception as e: raise CommandError(f"Processing error: {e}")`` also
+    catches the handler's *own* deliberate message, so a clean "Processing
+    cancelled after 55s, pass a larger timeout" came back to the user as
+    "Processing error: Processing cancelled after 55s" — reading as if the
+    timeout were an internal failure. Re-raise CommandError untouched first.
+    """
+    offenders = []
+    for name, src in _command_sources():
+        for node in ast.walk(ast.parse(src)):
+            if not isinstance(node, ast.Try):
+                continue
+            raised_here = _has_command_error_raise(*node.body)
+            rewraps = any(
+                _catches(h, "Exception") and _has_command_error_raise(h) for h in node.handlers
+            )
+            passes_through = any(_catches(h, "CommandError") for h in node.handlers)
+            if raised_here and rewraps and not passes_through:
+                offenders.append(f"{name}:{node.lineno}")
+    assert not offenders, (
+        "these try blocks raise a CommandError and then re-wrap it in their own "
+        f"catch-all — add `except CommandError: raise` first: {offenders}"
+    )

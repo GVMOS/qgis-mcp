@@ -2404,17 +2404,23 @@ async def execute_connection_sql(
 
 @mcp.tool(
     title="Add Web Layer",
-    description="Add a web layer (XYZ, WMS, WFS) to the project. service: 'xyz', 'wms', 'wfs'.",
+    description="Add a web layer (XYZ, WMS, WFS) to the project. service: 'xyz', 'wms', 'wfs'. "
+    "crs is optional and only meaningful for wms ('crs=' in the uri) and wfs ('srsname='): "
+    "leave it unset to take whatever the service serves natively. XYZ tiles are always "
+    "EPSG:3857, so requesting another CRS for them is an error rather than a silent no-op. "
+    "The response reports the CRS the layer actually got.",
 )
 async def add_web_layer(
     ctx: Context,
     url: str,
     service: str,
     name: str | None = None,
-    crs: str = "EPSG:3857",
+    crs: str | None = None,
     instance: str | None = None,
 ) -> list:
-    params = {"url": url, "service": service, "crs": crs}
+    params = {"url": url, "service": service}
+    if crs:
+        params["crs"] = crs
     if name:
         params["name"] = name
     result = await _send("add_web_layer", params, instance=instance)
