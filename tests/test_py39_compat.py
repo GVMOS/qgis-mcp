@@ -14,11 +14,21 @@ PLUGIN_DIR = os.path.join(os.path.dirname(__file__), "..", "qgis_mcp_plugin")
 
 
 def _plugin_sources():
-    for name in sorted(os.listdir(PLUGIN_DIR)):
-        if name.endswith(".py"):
-            path = os.path.join(PLUGIN_DIR, name)
-            with open(path, encoding="utf-8") as fh:
-                yield name, fh.read()
+    """Every plugin source file, including the handler subpackage.
+
+    Walks the tree rather than listing one directory: the handlers moved into
+    ``qgis_mcp_plugin/handlers/`` and a non-recursive listing skipped them
+    silently, which is the worst possible failure for a guard like this — most
+    of the command code would have gone unchecked while the tests stayed green.
+    """
+    for root, dirs, files in os.walk(PLUGIN_DIR):
+        dirs[:] = sorted(d for d in dirs if d != "__pycache__")
+        for name in sorted(files):
+            if name.endswith(".py"):
+                path = os.path.join(root, name)
+                label = os.path.relpath(path, PLUGIN_DIR).replace(os.sep, "/")
+                with open(path, encoding="utf-8") as fh:
+                    yield label, fh.read()
 
 
 def _has_future_annotations(tree):

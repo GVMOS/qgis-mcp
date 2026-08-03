@@ -18,7 +18,9 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           ASSET_NAME="qgis_mcp_plugin_v${VERSION//./-}.zip"
-          zip -r "$ASSET_NAME" qgis_mcp_plugin/ -x "qgis_mcp_plugin/__pycache__/*"
+          # Match __pycache__ at any depth: the handlers live in a subpackage,
+          # so a top-level-only pattern shipped their .pyc files to users.
+          zip -r "$ASSET_NAME" qgis_mcp_plugin/ -x "*__pycache__*"
           echo "ASSET_NAME=$ASSET_NAME" >> "$GITHUB_ENV"
 
       - name: Upload to GitHub Release
