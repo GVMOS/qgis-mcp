@@ -10,9 +10,9 @@ import re
 import secrets
 import shutil
 import socket
-import struct
 import sys
 import tempfile
+import time
 import traceback
 from collections import deque
 from pathlib import Path
@@ -58,6 +58,7 @@ from qgis.core import (
     QgsMultiBandColorRenderer,
     QgsPointXY,
     QgsPrintLayout,
+    QgsProcessingFeedback,
     QgsProcessingModelAlgorithm,
     QgsProcessingModelChildAlgorithm,
     QgsProcessingModelChildParameterSource,
@@ -98,6 +99,7 @@ from qgis.core import (
 from qgis.PyQt.QtCore import (
     QBuffer,
     QByteArray,
+    QCoreApplication,
     QEventLoop,
     QObject,
     QPointF,
@@ -191,6 +193,16 @@ from .compat import (
     URI_SSL_VERIFY_FULL,
     WKB_NO_GEOMETRY,
 )
+from .wire import (
+    BATCH_BLOCKED_COMMANDS,
+    HEADER_STRUCT,
+    MAX_MESSAGE_SIZE,
+    RECV_CHUNK_SIZE,
+    OutboundBuffer,
+    OutboundOverflow,
+    frame,
+    zip_strict,
+)
 
 _DEFAULT_HOST = "localhost"
 _DEFAULT_PORT = 9876
@@ -200,9 +212,9 @@ _DEFAULT_PORT = 9876
 # means the same thing here — the spin box floor is 1024, so EACCES cannot be the
 # "privileged port" case.
 _ADDR_IN_USE = frozenset({errno.EADDRINUSE, errno.EACCES, 10048, 10013})
-_RECV_CHUNK_SIZE = 65536
-_MAX_MESSAGE_SIZE = 10 * 1024 * 1024  # 10 MB
-_HEADER_STRUCT = struct.Struct(">I")
+_RECV_CHUNK_SIZE = RECV_CHUNK_SIZE
+_MAX_MESSAGE_SIZE = MAX_MESSAGE_SIZE
+_HEADER_STRUCT = HEADER_STRUCT
 
 
 def _json_safe(value):
@@ -221,6 +233,53 @@ def _json_safe(value):
     return value
 
 
+class _ResponsiveFeedback(QgsProcessingFeedback):
+    """Processing feedback that keeps the GUI alive and enforces a deadline.
+
+    ``processing.run()`` is synchronous and, called straight from the server's
+    timer callback, blocks Qt's event loop for its whole duration — the QGIS
+    window freezes under the user's cursor, which defeats the point of driving a
+    live instance they can also touch. Pumping the event loop on each progress
+    report keeps the UI responsive and gives the algorithm a cancellation point.
+
+    Re-entrancy is safe: ``processEvents`` re-fires the server timer, but
+    ``_in_dispatch`` makes ``process_server`` return immediately, so no nested
+    command runs inside this one.
+
+    Caveat: algorithms that never report progress never reach these hooks, so
+    they can neither pump nor time out. Long raster work is better run with
+    GDAL outside the live instance.
+    """
+
+    # Pump at most this often; processEvents() on every progress tick of a fast
+    # algorithm costs more than the responsiveness it buys.
+    _PUMP_INTERVAL = 0.05  # seconds
+
+    def __init__(self, budget_seconds):
+        super().__init__()
+        self._deadline = time.monotonic() + budget_seconds
+        self._last_pump = 0.0
+        self.timed_out = False
+
+    def _tick(self):
+        now = time.monotonic()
+        if now >= self._deadline:
+            self.timed_out = True
+            self.cancel()
+            return
+        if now - self._last_pump >= self._PUMP_INTERVAL:
+            self._last_pump = now
+            QCoreApplication.processEvents()
+
+    def setProgress(self, progress):
+        self._tick()
+        super().setProgress(progress)
+
+    def pushInfo(self, info):
+        self._tick()
+        super().pushInfo(info)
+
+
 class QgisMCPServer(QObject):
     """Server class to handle socket connections and execute QGIS commands"""
 
@@ -236,9 +295,19 @@ class QgisMCPServer(QObject):
         self.running = False
         self.socket = None
         self.clients: dict[socket.socket, bytes] = {}
+        # Unsent response bytes per client. Sockets are non-blocking, so a large
+        # response may not fit the kernel buffer in one call; the remainder is
+        # queued here and drained on later timer ticks.
+        self.outbound: dict[socket.socket, OutboundBuffer] = {}
         self.timer = None
         self._message_log = deque(maxlen=1000)
         self.start_error = None  # why start() failed, for the UI to report
+        # Guards against re-entrant dispatch. Long handlers (render_map, and
+        # processing via its feedback hook) pump the Qt event loop so the GUI
+        # stays responsive, which re-fires this server's timer. Without the
+        # guard a second client's command could execute *inside* the first
+        # one's handler, interleaving edit sessions and project state.
+        self._in_dispatch = False
 
     def _notify_clients_changed(self):
         """Report the active client count to the UI (badge on the toolbar icon)."""
@@ -246,10 +315,31 @@ class QgisMCPServer(QObject):
             with contextlib.suppress(Exception):
                 self.on_clients_changed(len(self.clients))
 
+    _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", ""})
+
     def start(self):
         """Start the server"""
         self.running = True
         self.start_error = None
+
+        # Refuse to expose an unauthenticated execute_code endpoint beyond this
+        # machine. On loopback the token is advisory (a same-user process can
+        # read the environment anyway), but a non-loopback bind puts arbitrary
+        # PyQGIS execution on the network, where anyone who can route to the
+        # port gets it. That is not a default anyone should be able to reach by
+        # accident, so it requires an explicit token.
+        if str(self.host).lower() not in self._LOOPBACK_HOSTS and not os.environ.get(
+            "QGIS_MCP_TOKEN", ""
+        ).strip():
+            self.start_error = (
+                f"Refusing to bind {self.host}: a non-loopback address exposes "
+                "arbitrary code execution to the network. Set QGIS_MCP_TOKEN "
+                "(in QGIS and in the MCP server) to enable this, or bind localhost."
+            )
+            QgsMessageLog.logMessage(self.start_error, self.LOG_TAG, MSG_CRITICAL)
+            self.running = False
+            return False
+
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         # SO_REUSEADDR does not mean the same thing on both platforms. On Windows
         # it lets a second socket bind a port another socket already holds, so two
@@ -322,6 +412,7 @@ class QgisMCPServer(QObject):
             with contextlib.suppress(Exception):
                 client_sock.close()
         self.clients.clear()
+        self.outbound.clear()
         self._notify_clients_changed()
 
         self.socket = None
@@ -332,21 +423,58 @@ class QgisMCPServer(QObject):
         with contextlib.suppress(Exception):
             client_sock.close()
         self.clients.pop(client_sock, None)
+        self.outbound.pop(client_sock, None)
         QgsMessageLog.logMessage(f"{message} ({len(self.clients)} active)", self.LOG_TAG, level)
         self._notify_clients_changed()
 
     def _send_response(self, client_sock, response):
-        """Send a length-prefixed JSON response to a client."""
+        """Queue a length-prefixed JSON response and write what the socket takes.
+
+        Never uses ``sendall``: these sockets are non-blocking, so a response
+        larger than the kernel send buffer (base64 renders and screenshots
+        routinely are) would raise ``BlockingIOError`` having already written a
+        partial frame. The caller's framing would then be desynced for every
+        subsequent message. Anything not accepted now stays queued and is
+        flushed by :meth:`_flush_outbound` on the next tick.
+        """
         resp_bytes = json.dumps(_json_safe(response)).encode("utf-8")
-        header = _HEADER_STRUCT.pack(len(resp_bytes))
-        client_sock.sendall(header + resp_bytes)
+        buf = self.outbound.get(client_sock)
+        if buf is None:
+            buf = self.outbound[client_sock] = OutboundBuffer()
+        buf.append(frame(resp_bytes))
+        if buf.flush(client_sock):
+            # Fully written — drop the entry so the common case leaves nothing
+            # for _flush_outbound to walk on every tick.
+            self.outbound.pop(client_sock, None)
+
+    def _flush_outbound(self):
+        """Drain queued responses for every client with pending bytes."""
+        for client_sock in list(self.outbound):
+            buf = self.outbound.get(client_sock)
+            if buf is None or not buf.pending:
+                continue
+            try:
+                if buf.flush(client_sock):
+                    self.outbound.pop(client_sock, None)
+            except Exception as e:
+                self._disconnect_client(client_sock, f"Error writing to client: {e!s}", MSG_WARNING)
 
     def process_server(self):
         """Process server operations (called by timer)"""
         if not self.running:
             return
 
+        # A handler is on the stack and is pumping the event loop to keep the
+        # GUI alive. Doing anything here would run a second command inside the
+        # first; the outer handler resumes this loop when it returns.
+        if self._in_dispatch:
+            return
+
         try:
+            # Drain any backlog first so a client that was mid-response gets the
+            # rest of its frame before we take on more work.
+            self._flush_outbound()
+
             # Accept new connections (loop until no pending or at capacity)
             if self.socket:
                 while len(self.clients) < self.MAX_CLIENTS:
@@ -396,13 +524,21 @@ class QgisMCPServer(QObject):
                                     {"status": "error", "message": f"Invalid JSON: {e!s}"},
                                 )
                                 continue
-                            response = self.execute_command(command)
+                            self._in_dispatch = True
+                            try:
+                                response = self.execute_command(command)
+                            finally:
+                                self._in_dispatch = False
                             self._send_response(client_sock, response)
                         self.clients[client_sock] = buf
                     else:
                         self._disconnect_client(client_sock)
                 except BlockingIOError:
                     pass
+                except OutboundOverflow as e:
+                    # The peer stopped reading while we kept producing. Nothing
+                    # can be delivered, so drop it rather than grow without bound.
+                    self._disconnect_client(client_sock, f"Client not reading: {e!s}", MSG_WARNING)
                 except Exception as e:
                     self._disconnect_client(client_sock, f"Error with client: {e!s}", MSG_WARNING)
 
@@ -729,7 +865,10 @@ class QgisMCPServer(QObject):
         if qvariant.isNull():
             return None
         value = qvariant.value()
-        if isinstance(value, int | float | str | bool | type(None)):
+        # Tuple form, not `int | float | ...`: PEP 604 unions in isinstance need
+        # Python 3.10, and QGIS ships 3.9 well past 3.28 (3.42 still does). The
+        # union form raises TypeError there, which broke every feature read.
+        if isinstance(value, (int, float, str, bool, type(None))):
             return value
         elif hasattr(value, "toPyDate"):
             return value.toPyDate().isoformat()
@@ -745,7 +884,10 @@ class QgisMCPServer(QObject):
         """Convert a feature attribute value to a JSON-serializable type."""
         if isinstance(value, QVariant):
             return self._convert_to_python_type(value)
-        if isinstance(value, int | float | str | bool | type(None)):
+        # Tuple form, not `int | float | ...`: PEP 604 unions in isinstance need
+        # Python 3.10, and QGIS ships 3.9 well past 3.28 (3.42 still does). The
+        # union form raises TypeError there, which broke every feature read.
+        if isinstance(value, (int, float, str, bool, type(None))):
             return value
         try:
             return str(value)
@@ -1146,18 +1288,50 @@ class QgisMCPServer(QObject):
         }
 
     def batch(self, commands, **kwargs):
-        """Execute multiple commands in sequence, return array of results."""
-        return [
-            self._dispatch({"type": cmd.get("type"), "params": cmd.get("params", {})})
-            for cmd in commands
-        ]
+        """Execute multiple commands in sequence, return array of results.
 
-    def execute_processing(self, algorithm, parameters, **kwargs):
+        Destructive commands are refused here, not only in the MCP server: the
+        socket is reachable by any local process, so a guard that lives solely
+        on the client side is advisory. Rejecting one command does not abort the
+        batch — the refusal is reported in that command's slot.
+        """
+        results = []
+        for cmd in commands:
+            cmd_type = cmd.get("type")
+            if cmd_type in BATCH_BLOCKED_COMMANDS:
+                QgsMessageLog.logMessage(
+                    f"Refused {cmd_type!r} inside batch", self.LOG_TAG, MSG_WARNING
+                )
+                results.append(
+                    {
+                        "status": "error",
+                        "message": (
+                            f"Command {cmd_type!r} is not allowed in batch — "
+                            "call it individually so confirmation can be requested"
+                        ),
+                    }
+                )
+                continue
+            results.append(self._dispatch({"type": cmd_type, "params": cmd.get("params", {})}))
+        return results
+
+    # Below the client's TIMEOUT_LONG (60s) so the plugin gives up — and says
+    # why — before the client abandons the request and leaves QGIS still working.
+    _PROCESSING_TIMEOUT = 55
+
+    def execute_processing(self, algorithm, parameters, timeout=None, **kwargs):
         try:
             import processing
 
             QgsMessageLog.logMessage(f"Processing: {algorithm}", self.LOG_TAG, MSG_INFO)
-            result = processing.run(algorithm, parameters)
+            budget = self._PROCESSING_TIMEOUT if timeout is None else float(timeout)
+            feedback = _ResponsiveFeedback(budget)
+            result = processing.run(algorithm, parameters, feedback=feedback)
+            if feedback.timed_out:
+                raise Exception(
+                    f"Processing cancelled after {budget:g}s. Pass a larger 'timeout', "
+                    "or run heavy raster work with GDAL outside QGIS."
+                )
             return {"algorithm": algorithm, "result": {k: str(v) for k, v in result.items()}}
         except Exception as e:
             raise Exception(f"Processing error: {e!s}") from e
@@ -1697,7 +1871,7 @@ class QgisMCPServer(QObject):
                 renderer.setBlueContrastEnhancement,
             )
             ranges = []
-            for setter, b in zip(setters, bands, strict=True):
+            for setter, b in zip_strict(setters, bands):
                 lo, hi = self._band_range(provider, b, min_value, max_value)
                 enhancement = QgsContrastEnhancement(provider.dataType(b))
                 enhancement.setContrastEnhancementAlgorithm(
@@ -3426,7 +3600,7 @@ class QgisMCPServer(QObject):
         siblings = list(parent.children())
         slots = sorted(siblings.index(n) for n in nodes)
         new_order = list(siblings)
-        for slot, node in zip(slots, nodes, strict=True):
+        for slot, node in zip_strict(slots, nodes):
             new_order[slot] = node
         clones = [n.clone() for n in new_order]
         parent.insertChildNodes(0, clones)

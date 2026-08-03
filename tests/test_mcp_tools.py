@@ -290,6 +290,39 @@ async def test_execute_processing_uses_long_timeout(mock_connection):
 
 
 @pytest.mark.asyncio
+async def test_execute_processing_default_sends_no_plugin_timeout(mock_connection):
+    """Without an explicit timeout the plugin applies its own default."""
+    mock_connection.send_command.return_value = {
+        "status": "success",
+        "result": {"algorithm": "test", "result": {}},
+    }
+    from qgis_mcp.server import execute_processing
+
+    await execute_processing(_make_ctx(), algorithm="native:buffer", parameters={})
+    sent_params = mock_connection.send_command.call_args[0][1]
+    assert "timeout" not in sent_params
+
+
+@pytest.mark.asyncio
+async def test_execute_processing_custom_timeout_outlives_plugin_deadline(mock_connection):
+    """The socket must outlast the plugin's deadline.
+
+    If the client gave up first, a slow algorithm would surface as an opaque
+    socket timeout while QGIS kept working on an orphaned job.
+    """
+    mock_connection.send_command.return_value = {
+        "status": "success",
+        "result": {"algorithm": "test", "result": {}},
+    }
+    from qgis_mcp.server import execute_processing
+
+    await execute_processing(_make_ctx(), algorithm="native:buffer", parameters={}, timeout=300)
+    args, kwargs = mock_connection.send_command.call_args
+    assert args[1]["timeout"] == 300, "plugin must receive the algorithm deadline"
+    assert kwargs["timeout"] > 300, "socket timeout must outlast the plugin deadline"
+
+
+@pytest.mark.asyncio
 async def test_render_map_returns_image_content(mock_connection):
     mock_connection.send_command.return_value = {
         "status": "success",
@@ -1445,9 +1478,7 @@ async def test_add_bookmark_tool(mock_connection):
     from qgis_mcp.server import add_bookmark
 
     ctx = _make_ctx()
-    output = await add_bookmark(
-        ctx, name="Munich", xmin=11.3, ymin=48.0, xmax=11.8, ymax=48.3
-    )
+    output = await add_bookmark(ctx, name="Munich", xmin=11.3, ymin=48.0, xmax=11.8, ymax=48.3)
     assert output["ok"] is True
     call_params = mock_connection.send_command.call_args[0][1]
     assert call_params["name"] == "Munich"
@@ -1579,9 +1610,7 @@ async def test_list_processing_models(mock_connection):
 
     result = await list_processing_models(_make_ctx())
     assert result["count"] == 1
-    mock_connection.send_command.assert_called_once_with(
-        "list_processing_models", None, timeout=30
-    )
+    mock_connection.send_command.assert_called_once_with("list_processing_models", None, timeout=30)
 
 
 @pytest.mark.asyncio
@@ -1648,9 +1677,7 @@ async def test_export_layer_with_reproject(mock_connection):
     }
     from qgis_mcp.server import export_layer
 
-    await export_layer(
-        _make_ctx(), layer_id="lyr", output_path="out.gpkg", target_crs="EPSG:4326"
-    )
+    await export_layer(_make_ctx(), layer_id="lyr", output_path="out.gpkg", target_crs="EPSG:4326")
     mock_connection.send_command.assert_called_once_with(
         "export_layer",
         {
@@ -2197,7 +2224,9 @@ async def test_compound_field_and_analysis_dispatch():
         assert params["stats"] == [0, 2]
         assert params["band"] == 1
 
-        await client.call_tool("processing", {"action": "run_model", "params": {"model": "model:x"}})
+        await client.call_tool(
+            "processing", {"action": "run_model", "params": {"model": "model:x"}}
+        )
         cmd, params = send.call_args[0][:2]
         assert cmd == "run_model"
         assert params == {"model": "model:x", "parameters": {}}
@@ -2305,7 +2334,9 @@ def test_unknown_instance_error_lists_configured_names():
 
     with (
         patch.dict(os.environ, {"QGIS_MCP_INSTANCES": "a=9876,b=9877"}, clear=True),
-        pytest.raises(ValueError, match=r"Unknown QGIS instance: 'nope'.*Configured instances: a, b"),
+        pytest.raises(
+            ValueError, match=r"Unknown QGIS instance: 'nope'.*Configured instances: a, b"
+        ),
     ):
         resolve_instance("nope")
 
@@ -2557,7 +2588,13 @@ async def test_every_tool_forwards_instance():
 
     def dummy(annotation):
         text = str(annotation)
-        for needle, value in (("list", []), ("dict", {}), ("bool", False), ("float", 1.0), ("int", 1)):
+        for needle, value in (
+            ("list", []),
+            ("dict", {}),
+            ("bool", False),
+            ("float", 1.0),
+            ("int", 1),
+        ):
             if needle in text:
                 return value
         return "x"
