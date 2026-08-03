@@ -437,4 +437,7 @@ uv run --no-sync pytest tests/test_qgis_live.py -v
 
 ## License
 
-This project is licensed under the GNU GPL v2 or later.
+This project is dual-licensed. Each component is distributed under its own license:
+
+- **QGIS Plugin** (`qgis_mcp_plugin/`) — [GNU GPL v2 or later](qgis_mcp_plugin/LICENSE)
+- **MCP Server** (`src/qgis_mcp/`) — [MIT](src/qgis_mcp/LICENSE)
