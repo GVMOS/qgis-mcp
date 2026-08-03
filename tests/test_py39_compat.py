@@ -62,7 +62,7 @@ def test_no_runtime_evaluated_pep604_annotations():
         if _has_future_annotations(tree):
             continue
         for node in ast.walk(tree):
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
                 continue
             annotations = [a.annotation for a in node.args.args if a.annotation]
             annotations += [a.annotation for a in node.args.kwonlyargs if a.annotation]

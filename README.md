@@ -389,6 +389,8 @@ By default the socket has **no authentication** — it binds to `localhost` only
 
 The token is compared in constant time. When `QGIS_MCP_TOKEN` is unset (the default), behaviour is unchanged. This raises the bar against other local users/processes; a process running as the same user can still read the token from your config, so it is not a sandbox.
 
+One exception: binding the plugin to a **non-loopback address** requires a token. Exposing arbitrary PyQGIS execution to the network without authentication is not a state you should be able to reach by accident, so the plugin refuses to start on such an address until `QGIS_MCP_TOKEN` is set (in QGIS and in the MCP server).
+
 ### Multiple QGIS instances
 
 One server registration can drive several running QGIS windows. Start each QGIS with the plugin on its own port, then list them in `QGIS_MCP_INSTANCES` as comma-separated `name=port` or `name=host:port` entries:
