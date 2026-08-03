@@ -120,13 +120,19 @@ class TestFeatureCRUD:
         client.send_command("delete_features", {"layer_id": cities_layer, "expression": "\"name\" = 'DelB'"})
 
     def test_update_nonexistent_fid_does_not_crash(self, client, cities_layer):
-        """Updating a fid that doesn't exist must not crash the plugin."""
+        """Updating a fid that doesn't exist must not crash the plugin.
+
+        The plugin validates fids up front and reports a clear error rather
+        than letting the provider silently claim success.
+        """
         resp = client.send_command(
             "update_features",
             {"layer_id": cities_layer, "updates": [{"fid": 999999, "attributes": {"name": "Ghost"}}]},
         )
-        assert resp["status"] == "success"
-        # QGIS may report updated=1 even for nonexistent fids (provider-dependent)
+        assert resp["status"] == "error"
+        assert "no feature with fid" in resp["message"]
+        # Connection must survive: the server answered, it didn't crash.
+        assert client.send_command("ping")["status"] == "success"
 
     def test_add_feature_wrong_field_returns_error_or_ignores(self, client, cities_layer):
         """Adding a feature with a nonexistent field should not crash."""

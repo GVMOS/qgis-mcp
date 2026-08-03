@@ -917,7 +917,8 @@ def test_update_feature_geometry_without_session(client, setup_test_data):
         "get_layer_features",
         {"layer_id": layer_id, "expression": f"$id = {fid}", "include_geometry": True},
     )
-    assert "7 8" in moved["result"]["features"][0]["_geometry"].replace("(", " ")
+    # Point geometry comes back as a dict with a `wkt` key (polygons/lines get a summary)
+    assert "7 8" in moved["result"]["features"][0]["_geometry"]["wkt"].replace("(", " ")
 
     bad = client.send_command(
         "update_feature_geometry",
@@ -958,7 +959,7 @@ print(layer.id())
         },
     )
     assert create["status"] == "success", create.get("message")
-    layer_id = create["result"]["output"].strip().splitlines()[-1]
+    layer_id = create["result"]["stdout"].strip().splitlines()[-1]
     try:
         for style_type, extra in (
             ("singleband_pseudocolor", {"color_ramp": "Viridis", "classes": 4}),
