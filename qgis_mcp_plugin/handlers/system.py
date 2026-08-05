@@ -77,11 +77,17 @@ class SystemHandlers:
         # out of date - and it is empty against a server older than 0.10.
         seen = sorted(self.client_versions)
         drifted = [v for v in seen if v != plugin_version()]
+        detail = {"seen": seen, "plugin": plugin_version(), "drifted": drifted}
+        # The update command each drifted client announced for itself. Absent
+        # against a client too old to send one.
+        fixes = {v: self.client_fixes[v] for v in drifted if v in self.client_fixes}
+        if fixes:
+            detail["fixes"] = fixes
         checks.append(
             {
                 "name": "client_versions",
                 "status": "mismatch" if drifted else "ok",
-                "detail": {"seen": seen, "plugin": plugin_version(), "drifted": drifted},
+                "detail": detail,
             }
         )
 

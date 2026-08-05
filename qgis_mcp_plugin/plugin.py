@@ -45,7 +45,7 @@ from .configurator import (
     _qgis_entry_has_refresh,
     _remove_refresh_from_entry,
 )
-from .constants import DEFAULT_PORT, SETTINGS_PREFIX, plugin_version
+from .constants import DEFAULT_PORT, SETTINGS_PREFIX
 from .server import QgisMCPServer
 
 
@@ -254,33 +254,25 @@ class QgisMCPPlugin:
             f"MCP server running on :{port} - {count} {plural} connected - click to stop"
         )
 
-    def _on_client_version(self, version):
-        """Note once when a connected MCP server is not this plugin's version.
+    def _start_server_from_dialog(self):
+        """Start the socket server on behalf of the configurator dialog.
 
-        The two halves drift by default rather than by accident: QGIS upgrades
-        the plugin through the Plugin Manager, while uvx keeps serving whatever
-        it cached for the configured archive URL. Nobody finds out otherwise.
-
-        Deliberately informational, not a warning: mismatched halves keep working
-        - only tools added since the older half was built are missing. Crying
-        wolf here would teach the user to dismiss the bar. The exact update
-        command depends on how the MCP server was launched, which only that side
-        knows, so point at the configurator instead of guessing.
+        Returns the running server, or None if it failed to bind. Goes through
+        the toolbar action so the icon and checked state stay in sync.
         """
-        mine = plugin_version()
-        if version == mine:
-            return
-        with contextlib.suppress(Exception):
-            self.iface.messageBar().pushInfo(
-                "QGIS MCP",
-                f"MCP server {version} · plugin {mine}. It works, but newer tools may be "
-                "missing - matching them is recommended. See Plugins ▸ QGIS MCP ▸ MCP Setup "
-                "& Configurator, or ask your agent to run 'diagnose' for the exact command.",
-            )
+        if self.server is None:
+            self.action.setChecked(True)
+            self.toggle_server(True)
+        return self.server
 
     def _show_help(self):
         """Show the MCP Setup & Configurator dialog."""
-        dlg = MCPConfiguratorDialog(self.iface, self.iface.mainWindow(), server=self.server)
+        dlg = MCPConfiguratorDialog(
+            self.iface,
+            self.iface.mainWindow(),
+            server=self.server,
+            start_server=self._start_server_from_dialog,
+        )
         dlg.exec()
         # Reflect an auto-start change made in the dialog onto the toolbar checkbox.
         if hasattr(self, "autostart_cb"):
@@ -368,7 +360,6 @@ class QgisMCPPlugin:
                 port=port,
                 iface=self.iface,
                 on_clients_changed=self._on_clients_changed,
-                on_client_version=self._on_client_version,
             )
             if self.server.start():
                 self.action.setIcon(self._green_logo_icon())

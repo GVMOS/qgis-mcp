@@ -3043,7 +3043,7 @@ def test_diagnose_match_has_no_fix_field():
 
 
 def test_client_version_is_length_capped():
-    """It reaches a QGIS message bar, so it is bounded before it goes on the wire."""
+    """It reaches a QGIS user, so it is bounded before it goes on the wire."""
     from qgis_mcp import protocol
 
     original = protocol._client_version

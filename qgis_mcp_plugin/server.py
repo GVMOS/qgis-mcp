@@ -23,7 +23,14 @@ from qgis.core import QgsApplication, QgsMessageLog
 from qgis.PyQt.QtCore import QObject, QTimer
 
 from .compat import MSG_CRITICAL, MSG_INFO, MSG_WARNING
-from .constants import ADDR_IN_USE, DEFAULT_HOST, DEFAULT_PORT, MAX_VERSION_LENGTH
+from .constants import (
+    ADDR_IN_USE,
+    DEFAULT_HOST,
+    DEFAULT_PORT,
+    MAX_PATH_LENGTH,
+    MAX_VERSION_LENGTH,
+    plugin_version,
+)
 from .errors import CommandError
 from .handlers import (
     CanvasHandlers,
@@ -98,18 +105,21 @@ class QgisMCPServer(
         port=DEFAULT_PORT,
         iface=None,
         on_clients_changed=None,
-        on_client_version=None,
     ):
         super().__init__()
         self.host = host
         self.port = port
         self.iface = iface
         self.on_clients_changed = on_clients_changed
-        self.on_client_version = on_client_version
-        # Versions announced by connected MCP servers this session. The plugin
-        # compares them against its own to warn about a drifted install, and
-        # `diagnose` reports them so the mismatch is visible from the client too.
+        # Versions announced by connected MCP servers this session. Reported by
+        # `diagnose`, by the configurator dialog, and by one log line per new
+        # version - never by the message bar, which is reserved for things the
+        # user just did.
         self.client_versions = set()
+        # version -> the update command that client announced for itself. Only
+        # the client knows whether it was launched by uvx or from a checkout, so
+        # this is the only way the plugin can name the right command.
+        self.client_fixes = {}
         self._signatures = {}  # cmd_type -> inspect.Signature, filled on first use
         self.running = False
         self.socket = None
@@ -134,23 +144,79 @@ class QgisMCPServer(
             with contextlib.suppress(Exception):
                 self.on_clients_changed(len(self.clients))
 
-    def _record_client_version(self, raw):
-        """Note the version an MCP server announced, and report it once.
+    # The update command per install kind, built here rather than accepted from
+    # the peer: it is shown to the user as something to run, and a client is not
+    # trusted to author that text. The client announces only which kind it is.
+    _FIX_COMMANDS: ClassVar[dict] = {
+        "uvx": "uv cache clean qgis-mcp",
+        "source": 'uv --directory "{root}" sync',
+    }
+    # A path is all that is ever interpolated, so anything that could end the
+    # quoting or chain a second command disqualifies it.
+    _PATH_REJECTED: ClassVar[frozenset] = frozenset("\"'`$;&|<>\n\r")
+
+    @staticmethod
+    def _clean_announced(raw, limit):
+        """Trim a peer-supplied string to one safe, bounded line, or ''.
+
+        Everything announced by a client is shown to the user, so it is treated
+        as untrusted: newlines would let a peer forge extra lines in a message
+        bar, and an unbounded string would fill it.
+        """
+        if not isinstance(raw, str):
+            return ""
+        return " ".join(raw.split())[:limit]
+
+    def _fix_command(self, kind, raw_root):
+        """The update command for an announced install kind, or ''.
+
+        Unknown kind, or a checkout path carrying anything shell-significant,
+        yields no command at all: the UI then falls back to pointing at the
+        configurator, which is worse advice than an exact command but is never
+        attacker-authored.
+        """
+        template = self._FIX_COMMANDS.get(kind)
+        if template is None:
+            return ""
+        if "{root}" not in template:
+            return template
+        root = self._clean_announced(raw_root, MAX_PATH_LENGTH)
+        if not root or self._PATH_REJECTED & set(root):
+            return ""
+        return template.format(root=root)
+
+    def _record_client_version(self, raw, kind=None, raw_root=None):
+        """Note the version an MCP server announced, and how to update it.
 
         Only ever called on an authenticated command: an unauthenticated peer
         must not be able to put strings in front of the user or grow this set.
         """
-        if not isinstance(raw, str):
-            return
-        version = raw.strip()[:MAX_VERSION_LENGTH]
+        version = self._clean_announced(raw, MAX_VERSION_LENGTH)
         if not version or version in self.client_versions:
             return
         if len(self.client_versions) >= self.MAX_TRACKED_VERSIONS:
             return
         self.client_versions.add(version)
-        if self.on_client_version:
-            with contextlib.suppress(Exception):
-                self.on_client_version(version)
+        fix = self._fix_command(kind, raw_root)
+        if fix:
+            self.client_fixes[version] = fix
+
+        # Once per new version, and to the log only - never the message bar.
+        # Drift is otherwise invisible unless someone runs `diagnose` or opens
+        # the configurator, but it is advisory, and a banner over the canvas for
+        # something the user did not do is out of proportion to that.
+        mine = plugin_version()
+        if version == mine:
+            QgsMessageLog.logMessage(f"MCP server {version} connected", self.LOG_TAG, MSG_INFO)
+            return
+        message = (
+            f"MCP server {version} connected, but this plugin is {mine}. "
+            "Not fatal: tools added since the older half was built will be "
+            "missing or refused."
+        )
+        if fix:
+            message += f" To match them, run: {fix} (then restart your MCP client)."
+        QgsMessageLog.logMessage(message, self.LOG_TAG, MSG_WARNING)
 
     _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", ""})
 
@@ -408,7 +474,11 @@ class QgisMCPServer(
 
         # Authenticated from here on, so the announced version can be trusted
         # enough to show the user. Absent on MCP servers older than 0.10.
-        self._record_client_version(command.get("client_version"))
+        self._record_client_version(
+            command.get("client_version"),
+            command.get("client_install"),
+            command.get("client_root"),
+        )
         return self._dispatch(command)
 
     def _signature(self, cmd_type, handler):

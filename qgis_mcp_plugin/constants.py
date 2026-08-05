@@ -20,9 +20,13 @@ PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_PREFIX = "qgis_mcp"
 
 # Cap what is accepted as a peer's version string: it arrives over the socket
-# and ends up in a QGIS message bar. Mirrors MAX_VERSION_LENGTH in
+# and ends up in front of the user. Mirrors MAX_VERSION_LENGTH in
 # src/qgis_mcp/protocol.py, which the client applies before sending.
 MAX_VERSION_LENGTH = 32
+
+# Same treatment for the checkout path a peer announces. Mirrors
+# MAX_PATH_LENGTH in src/qgis_mcp/protocol.py.
+MAX_PATH_LENGTH = 160
 
 _plugin_version = None
 

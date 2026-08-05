@@ -20,6 +20,7 @@ from qgis_mcp.protocol import (
     TIMEOUT_LONG,
     get_auth_token,
     get_client_version,
+    get_install_info,
 )
 
 logger = logging.getLogger("QgisMCPClient")
@@ -105,14 +106,23 @@ class QgisMCPClient:
             raise ConnectionError("Not connected to server")
 
         # The plugin reads `client_version` to tell the user when the two halves
-        # have drifted apart - a real risk, since the uvx cache pins the server
-        # while QGIS keeps upgrading the plugin. An older plugin ignores the
-        # extra key, so this is safe in both directions.
+        # have drifted apart, a real risk since the uvx cache pins the server
+        # while QGIS keeps upgrading the plugin. `client_install` tells it which
+        # update command to name: only this side can tell a uvx launch from a
+        # source checkout, so without it the plugin can report the drift but not
+        # what to do about it. The command itself is never sent, only the kind
+        # of install, because the plugin puts it in front of the user as
+        # something to run. An older plugin ignores the extra keys, so this is
+        # safe in both directions.
+        install_kind, install_root = get_install_info()
         command = {
             "type": command_type,
             "params": params or {},
             "client_version": get_client_version(),
+            "client_install": install_kind,
         }
+        if install_root:
+            command["client_root"] = install_root
 
         # Attach the shared-secret token when QGIS_MCP_TOKEN is configured. No-op
         # when auth is disabled, so existing setups are unaffected.

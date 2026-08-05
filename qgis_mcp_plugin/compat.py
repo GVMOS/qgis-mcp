@@ -108,6 +108,10 @@ TOOLBUTTON_ICON_ONLY = _enum(
 )
 PAINTER_ANTIALIAS = _enum((QPainter, "RenderHint.Antialiasing"), (QPainter, "Antialiasing"))
 ALIGN_CENTER = _enum((Qt, "AlignmentFlag.AlignCenter"), (Qt, "AlignCenter"))
+TEXT_SELECTABLE_BY_MOUSE = _enum(
+    (Qt, "TextInteractionFlag.TextSelectableByMouse"),
+    (Qt, "TextSelectableByMouse"),
+)
 MSGBOX_QUESTION = _enum((QMessageBox, "Icon.Question"), (QMessageBox, "Question"))
 MSGBOX_ACCEPT_ROLE = _enum((QMessageBox, "ButtonRole.AcceptRole"), (QMessageBox, "AcceptRole"))
 MSGBOX_REJECT_ROLE = _enum((QMessageBox, "ButtonRole.RejectRole"), (QMessageBox, "RejectRole"))

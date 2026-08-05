@@ -7,7 +7,6 @@ importable without the ``mcp`` package.
 """
 
 import json
-import pathlib
 
 from mcp.types import Annotations, ImageContent, ResourceLink, TextContent
 
@@ -22,27 +21,8 @@ from qgis_mcp.protocol import (  # noqa: F401 - re-exported for server-side impo
     TIMEOUT_LONG,
     get_auth_token,
     get_client_version,
+    get_update_command,
 )
-
-
-def _update_command() -> str:
-    """The command that actually updates *this* MCP server install.
-
-    Which one is right depends on how the server was launched, and the two are
-    not interchangeable - telling a uvx user to run ``uv sync`` (or the reverse)
-    wastes the one instruction the agent is going to relay. A source checkout has
-    a pyproject.toml two levels above this module; a uvx install lives in an
-    ephemeral environment that does not.
-    """
-    repo_root = pathlib.Path(__file__).resolve().parents[2]
-    if (repo_root / "pyproject.toml").is_file():
-        # Deliberately no `git pull`: the mismatch here is a stale *recorded*
-        # version in the venv, not out-of-date source, and touching someone's
-        # working tree is not this tool's business. `uv sync` re-records it.
-        return f'uv --directory "{repo_root}" sync'
-    # uvx caches the built package per source URL, and the configured URL points
-    # at a branch archive, so nothing re-downloads until the cache is dropped.
-    return "uv cache clean qgis-mcp   (then restart your MCP client)"
 
 
 def enrich_diagnose(result: dict) -> dict:
@@ -63,11 +43,13 @@ def enrich_diagnose(result: dict) -> dict:
         # The whole point of reporting a mismatch is that someone can act on it.
         # Say what it actually costs, too: mismatched halves keep working, and a
         # report that reads like an outage gets ignored the next time it matters.
-        detail["fix"] = _update_command()
+        detail["fix"] = get_update_command()
+        detail["restart_after_fix"] = True
         detail["note"] = (
-            "Not fatal - mismatched halves keep working. Tools added since the "
+            "Not fatal. Mismatched halves keep working; tools added since the "
             "older half was built will be missing or refused, so matching them "
-            "is recommended rather than required."
+            "is recommended rather than required. Restart your MCP client after "
+            "running the fix."
         )
     result["checks"].append({"name": "version_match", "status": version_match, "detail": detail})
     if version_match == "mismatch" and result["status"] == "healthy":

@@ -7,6 +7,7 @@ conda env).
 
 import importlib.metadata
 import os
+import pathlib
 import struct
 
 # ---------------------------------------------------------------------------
@@ -47,7 +48,7 @@ def get_auth_token():
     return token or None
 
 
-# Cap what goes on the wire and into a QGIS message bar: the plugin treats this
+# Cap what goes on the wire and in front of a QGIS user: the plugin treats this
 # as untrusted input, and no real version string is anywhere near this long.
 MAX_VERSION_LENGTH = 32
 
@@ -74,3 +75,59 @@ def get_client_version():
         except importlib.metadata.PackageNotFoundError:
             _client_version = "unknown"
     return _client_version[:MAX_VERSION_LENGTH]
+
+
+# How this MCP server was launched. Announced to the plugin so it can name the
+# command that updates *this* install: `uv cache clean` and `uv sync` are not
+# interchangeable, and only this side can tell the two apart.
+INSTALL_UVX = "uvx"
+INSTALL_SOURCE = "source"
+
+# The checkout path travels with INSTALL_SOURCE and ends up in the QGIS log and
+# the configurator, so it is capped like the version string.
+MAX_PATH_LENGTH = 160
+
+_install_info = None
+
+
+def get_install_info():
+    """``(kind, root)``: how this MCP server was installed, and from where.
+
+    ``root`` is the checkout path for ``INSTALL_SOURCE`` and ``None`` for
+    ``INSTALL_UVX``. A source checkout has a pyproject.toml two levels above
+    this module; a uvx install lives in an ephemeral environment that does not.
+
+    Only the *kind* crosses the socket, never a ready-made command string: the
+    plugin shows the command to the user as something to run, so it builds it
+    from its own literals rather than trusting text from a peer.
+
+    Lives here rather than in ``helpers`` because the client sends this on every
+    command and must stay importable without ``mcp``. Resolved once: it cannot
+    change while the process lives.
+    """
+    global _install_info
+    if _install_info is None:
+        repo_root = pathlib.Path(__file__).resolve().parents[2]
+        if (repo_root / "pyproject.toml").is_file():
+            _install_info = (INSTALL_SOURCE, str(repo_root)[:MAX_PATH_LENGTH])
+        else:
+            _install_info = (INSTALL_UVX, None)
+    return _install_info
+
+
+def get_update_command():
+    """The command that updates *this* MCP server install, for local reporting.
+
+    Used by ``enrich_diagnose``, which runs on this side of the socket, so the
+    string is safe to build here. The plugin has its own copy of these templates
+    for the same reason in reverse.
+    """
+    kind, root = get_install_info()
+    if kind == INSTALL_SOURCE:
+        # Deliberately no `git pull`: the mismatch is a stale *recorded* version
+        # in the venv, not out-of-date source, and touching someone's working
+        # tree is not this tool's business. `uv sync` re-records it.
+        return f'uv --directory "{root}" sync'
+    # uvx caches the built package per source URL, and the configured URL points
+    # at a branch archive, so nothing re-downloads until the cache is dropped.
+    return "uv cache clean qgis-mcp"

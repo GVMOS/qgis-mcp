@@ -25,8 +25,13 @@ from qgis.PyQt.QtWidgets import (
     QVBoxLayout,
 )
 
-from .compat import MSG_CRITICAL, MSG_INFO
+from .compat import MSG_CRITICAL, MSG_INFO, TEXT_SELECTABLE_BY_MOUSE
 from .constants import SETTINGS_PREFIX, plugin_version
+
+# Fallback for a drifted MCP server too old to announce its own update command.
+# Assumes the recommended uvx install, where clearing the cache is what makes
+# the next launch re-resolve the archive URL instead of reusing the old build.
+DEFAULT_VERSION_FIX = "uv cache clean qgis-mcp"
 
 
 def _client_config_registry(repo_dir):
@@ -123,13 +128,16 @@ def _remove_refresh_from_entry(entry):
 
 
 class MCPConfiguratorDialog(QDialog):
-    def __init__(self, iface, parent=None, server=None):
+    def __init__(self, iface, parent=None, server=None, start_server=None):
         super().__init__(parent)
         self.iface = iface
         # The running QgisMCPServer, when there is one: it knows which MCP server
         # versions have actually connected, which is the only way this dialog can
         # report drift between the two halves.
         self.server = server
+        # Callable that starts the socket server and returns it (or None on
+        # failure). Supplied by the plugin, which owns the toolbar state.
+        self.start_server = start_server
         self.setWindowTitle("QGIS MCP - Setup & Configurator")
         self.setMinimumSize(600, 500)
 
@@ -240,13 +248,19 @@ class MCPConfiguratorDialog(QDialog):
         self.autostart_check = QCheckBox("Start MCP server automatically when QGIS opens")
         self.autostart_check.setToolTip(
             "Launch the MCP server on QGIS startup so an AI agent can reconnect\n"
-            "without manually starting it (e.g. after a crash and restart)."
+            "without manually starting it (e.g. after a crash and restart).\n"
+            "Ticking this also starts the server now if it is not running."
         )
         self.autostart_check.setChecked(
             QgsSettings().value(f"{SETTINGS_PREFIX}/autostart", False, type=bool)
         )
         self.autostart_check.toggled.connect(self._save_autostart)
         client_form.addWidget(self.autostart_check)
+
+        # Whether the socket server is up. Without it, ticking auto-start looks
+        # like nothing happened - the toolbar icon is hidden behind this dialog.
+        self.server_label = QLabel()
+        client_form.addWidget(self.server_label)
         layout.addWidget(client_group)
 
         # ── Step 2: configuration preview ────────────────────────────
@@ -281,7 +295,17 @@ class MCPConfiguratorDialog(QDialog):
         # normal and invisible unless it is stated somewhere the user looks.
         self.version_label = QLabel()
         self.version_label.setWordWrap(True)
-        preview_box.addWidget(self.version_label)
+        # The drift message names a command to run; a plain QLabel cannot even be
+        # selected, so give it both selection and a one-click copy.
+        self.version_label.setTextInteractionFlags(TEXT_SELECTABLE_BY_MOUSE)
+        version_row = QHBoxLayout()
+        version_row.addWidget(self.version_label, 1)
+        self.version_fix_btn = QPushButton("Copy fix")
+        self.version_fix_btn.setFixedWidth(80)
+        self.version_fix_btn.clicked.connect(self._copy_version_fix)
+        self.version_fix_btn.setVisible(False)
+        version_row.addWidget(self.version_fix_btn)
+        preview_box.addLayout(version_row)
         layout.addWidget(preview_group)
 
         layout.addStretch()
@@ -312,8 +336,17 @@ class MCPConfiguratorDialog(QDialog):
         return (self.repo_dir / ".git").exists()
 
     def _save_autostart(self, checked):
-        """Persist the auto-start-on-QGIS-startup preference."""
+        """Persist the auto-start preference, and start the server if it is off.
+
+        On a fresh install the server has never been started, so ticking this
+        and getting nothing until the next QGIS launch reads as a broken
+        checkbox. Unticking only affects the next launch - it does not stop a
+        running server, which would be a surprising way to lose a live session.
+        """
         QgsSettings().setValue(f"{SETTINGS_PREFIX}/autostart", checked)
+        if checked and self.server is None and self.start_server:
+            self.server = self.start_server()
+            self.refresh_status()
 
     def _find_uv(self):
         """Return uv executable path, checking common Windows install locations."""
@@ -340,6 +373,24 @@ class MCPConfiguratorDialog(QDialog):
         QgsApplication.clipboard().setText(self.preview_edit.toPlainText())
         self.copy_btn.setText("Copied!")
         QTimer.singleShot(1500, lambda: self.copy_btn.setText("Copy"))
+
+    def _version_fix_commands(self, drifted):
+        """The update commands for the drifted MCP servers, one per install kind.
+
+        Only the MCP server side knows whether it was launched by uvx or from a
+        source checkout, and the two commands are not interchangeable, so the
+        plugin builds one per kind it was told about. Kept as a list rather than
+        joined into a single line: `;` chains commands in bash and PowerShell
+        but not in cmd.exe, and a copy button that silently produces a broken
+        command line is worse than two lines to paste.
+        """
+        fixes = getattr(self.server, "client_fixes", None) or {}
+        return sorted({fixes[v] for v in drifted if v in fixes}) or [DEFAULT_VERSION_FIX]
+
+    def _copy_version_fix(self):
+        QgsApplication.clipboard().setText(self.version_fix_btn.property("command"))
+        self.version_fix_btn.setText("Copied!")
+        QTimer.singleShot(1500, lambda: self.version_fix_btn.setText("Copy fix"))
 
     def _get_client_info(self, client_name):
         return _client_config_registry(self.repo_dir).get(client_name)
@@ -472,25 +523,43 @@ class MCPConfiguratorDialog(QDialog):
         mine = plugin_version()
         seen = sorted(getattr(self.server, "client_versions", ()) or ())
         if not seen:
+            self.version_fix_btn.setVisible(False)
             self.version_label.setText(
-                f"Plugin {mine} · MCP server: none connected yet "
-                "(start the server and run a tool once)"
+                f"Plugin {mine}, MCP server: none connected yet "
+                "(start the server and run a tool once)."
             )
             self.version_label.setStyleSheet("color: gray;")
             return
         drifted = [v for v in seen if v != mine]
+        self.version_fix_btn.setVisible(bool(drifted))
         if drifted:
+            fixes = self._version_fix_commands(drifted)
+            self.version_fix_btn.setProperty("command", "\n".join(fixes))
+            self.version_fix_btn.setToolTip("Copy to the clipboard:\n" + "\n".join(fixes))
+            spelled = " and ".join(f"`{f}`" for f in fixes)
             self.version_label.setText(
-                f"Plugin {mine} · MCP server {', '.join(seen)} - versions differ. This works; "
-                "tools added since the older half was built will be missing, so matching them "
-                "is recommended: run 'uv cache clean qgis-mcp', then restart your MCP client."
+                f"Plugin {mine}, MCP server {', '.join(seen)}. The versions differ. "
+                "Everything still works, but tools added since the older half was built "
+                f"will be missing. To match them, run {spelled}, then restart your MCP client."
             )
             self.version_label.setStyleSheet("color: orange;")
         else:
-            self.version_label.setText(f"Plugin {mine} · MCP server {', '.join(seen)} - matching")
+            self.version_label.setText(
+                f"Plugin {mine}, MCP server {', '.join(seen)}. The versions match."
+            )
             self.version_label.setStyleSheet("color: green;")
 
+    def _refresh_server_state(self):
+        """Show whether the socket server is listening."""
+        if self.server is not None:
+            self.server_label.setText(f"Server: running on port {self.server.port}")
+            self.server_label.setStyleSheet("color: green;")
+        else:
+            self.server_label.setText("Server: not running")
+            self.server_label.setStyleSheet("color: gray;")
+
     def refresh_status(self):
+        self._refresh_server_state()
         self._refresh_versions()
         client = self.client_combo.currentText()
         info = self._get_client_info(client)
