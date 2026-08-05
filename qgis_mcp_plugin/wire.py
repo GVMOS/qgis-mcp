@@ -1,7 +1,7 @@
 """Stdlib-only wire helpers for the plugin's socket server.
 
 Deliberately free of ``qgis`` imports so the framing logic can be unit-tested
-outside QGIS — the plugin-side mirror of ``qgis_mcp.protocol`` on the client
+outside QGIS - the plugin-side mirror of ``qgis_mcp.protocol`` on the client
 side. Must stay importable on Python 3.9 (QGIS 3.28 ships it).
 """
 
@@ -12,7 +12,7 @@ import struct
 
 HEADER_STRUCT = struct.Struct(">I")  # 4-byte big-endian uint32 length prefix
 RECV_CHUNK_SIZE = 65536
-MAX_MESSAGE_SIZE = 10 * 1024 * 1024  # 10 MB — inbound frame/buffer limit
+MAX_MESSAGE_SIZE = 10 * 1024 * 1024  # 10 MB - inbound frame/buffer limit
 
 # Cap on bytes queued for one client that has stopped reading. Renders and
 # screenshots are base64 and can legitimately reach several MB, so this sits
@@ -54,7 +54,7 @@ def zip_strict(*iterables):
 
     The ``strict`` keyword landed in 3.10, and QGIS bundles 3.9 well past the
     plugin's 3.28 minimum. Calling it there raises "zip() takes no keyword
-    arguments" at call time — an error CI never sees, because the test suite
+    arguments" at call time - an error CI never sees, because the test suite
     runs on a newer interpreter.
 
     Inputs are materialised so length can be compared up front; every call
@@ -95,7 +95,7 @@ class OutboundBuffer:
         if len(self._buf) + len(data) > self._max_bytes:
             raise OutboundOverflow(
                 f"outbound backlog would exceed {self._max_bytes} bytes "
-                f"({len(self._buf)} queued, {len(data)} more) — client is not reading"
+                f"({len(self._buf)} queued, {len(data)} more) - client is not reading"
             )
         self._buf.extend(data)
 

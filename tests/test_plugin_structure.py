@@ -16,7 +16,7 @@ MCP_SRC = os.path.join(HERE, "..", "src", "qgis_mcp")
 
 # Modules that sit in the plugin package root. A module inside handlers/ must
 # reach them with two dots; one dot resolves inside handlers/ and fails at
-# import time — which no compile check or unit test catches, because the plugin
+# import time - which no compile check or unit test catches, because the plugin
 # is only ever imported by QGIS.
 PACKAGE_ROOT_MODULES = ("compat", "constants", "errors", "registry", "wire")
 
@@ -66,7 +66,7 @@ def _commands_the_server_sends():
 
 
 def _one_dot_imports(src):
-    """``from .x import ...`` nodes — one dot resolves inside handlers/."""
+    """``from .x import ...`` nodes - one dot resolves inside handlers/."""
     for node in ast.walk(ast.parse(src)):
         if isinstance(node, ast.ImportFrom) and node.level == 1 and node.module:
             yield node
@@ -117,7 +117,7 @@ def test_every_registered_command_is_reachable_from_the_mcp_server():
     """The reverse: a handler nothing can call is either dead code or a missing tool."""
     unreachable = sorted(set(_registered_commands()) - _commands_the_server_sends())
     assert not unreachable, (
-        "these handlers are registered but src/qgis_mcp never sends them — add the "
+        "these handlers are registered but src/qgis_mcp never sends them - add the "
         f"tool or drop the handler: {unreachable}"
     )
 
@@ -177,7 +177,7 @@ def test_deliberate_command_errors_are_not_rewrapped():
     ``except Exception as e: raise CommandError(f"Processing error: {e}")`` also
     catches the handler's *own* deliberate message, so a clean "Processing
     cancelled after 55s, pass a larger timeout" came back to the user as
-    "Processing error: Processing cancelled after 55s" — reading as if the
+    "Processing error: Processing cancelled after 55s" - reading as if the
     timeout were an internal failure. Re-raise CommandError untouched first.
     """
     offenders = []
@@ -194,5 +194,5 @@ def test_deliberate_command_errors_are_not_rewrapped():
                 offenders.append(f"{name}:{node.lineno}")
     assert not offenders, (
         "these try blocks raise a CommandError and then re-wrap it in their own "
-        f"catch-all — add `except CommandError: raise` first: {offenders}"
+        f"catch-all - add `except CommandError: raise` first: {offenders}"
     )

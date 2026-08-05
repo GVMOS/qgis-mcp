@@ -153,7 +153,7 @@ def get_instances() -> dict[str, tuple[str, int]]:
     """Resolve the configured QGIS instances from the environment.
 
     When ``QGIS_MCP_INSTANCES`` is unset or empty, exactly one instance named
-    ``default`` is defined from ``QGIS_MCP_HOST``/``QGIS_MCP_PORT`` — so
+    ``default`` is defined from ``QGIS_MCP_HOST``/``QGIS_MCP_PORT`` - so
     single-instance setups behave exactly as before. Read on every call (rather
     than cached at import) so the environment stays the single source of truth.
     """
@@ -174,7 +174,7 @@ def _unknown_instance_error(name: str, instances: dict[str, tuple[str, int]]) ->
 def implicit_instance(instances: dict[str, tuple[str, int]]) -> str:
     """The instance a call with no explicit name is routed to.
 
-    ``default`` when it exists, otherwise the FIRST configured entry — dict
+    ``default`` when it exists, otherwise the FIRST configured entry - dict
     insertion order, which is the order written in ``QGIS_MCP_INSTANCES``.
     Without this fallback the natural config ``a=9876,b=9877`` would break every
     instance-less call, and instance-less is how tools are overwhelmingly
@@ -190,7 +190,7 @@ def resolve_instance(instance: str | None) -> str:
     """Validate an instance name; ``None`` resolves per :func:`implicit_instance`."""
     instances = get_instances()
     if not instances:
-        raise ValueError("No QGIS instances configured — check QGIS_MCP_INSTANCES")
+        raise ValueError("No QGIS instances configured - check QGIS_MCP_INSTANCES")
     name = instance or implicit_instance(instances)
     if name not in instances:
         raise _unknown_instance_error(name, instances)
@@ -332,7 +332,7 @@ def _send_sync(
 ) -> dict:
     """Send a command synchronously to *instance* and return the unwrapped result.
 
-    ``instance=None`` resolves per :func:`implicit_instance` — the entry named
+    ``instance=None`` resolves per :func:`implicit_instance` - the entry named
     ``default`` when present, otherwise the first one configured. Holds that
     instance's lock for the entire send+recv cycle so that concurrent
     asyncio.to_thread calls cannot interleave frames on its shared socket; other
@@ -348,7 +348,7 @@ def _send_sync(
     from costing ~21s every single time.
 
     ``retries`` overrides that schedule. Pass 1 for calls that must stay quick and
-    have nothing to gain from waiting — listing instances, for one, where the
+    have nothing to gain from waiting - listing instances, for one, where the
     whole point is a fast answer about each one's current state.
     """
     name = resolve_instance(instance)
@@ -380,7 +380,7 @@ def _send_sync(
                     # window rather than a slow start, and retrying only repeats
                     # the OS's ~2s refusal latency. Fail on the first attempt.
                     logger.warning(
-                        "Instance %r refused the connection — not retrying (%s)", name, exc
+                        "Instance %r refused the connection - not retrying (%s)", name, exc
                     )
                     raise
                 if attempt < max_retries - 1:
@@ -466,7 +466,7 @@ async def _confirm_destructive(ctx: Context, message: str) -> bool:
     try:
         response = await ctx.elicit(message=message, schema=_ConfirmSchema)
     except McpError:
-        # Client doesn't support elicitation — proceed (fail-open).
+        # Client doesn't support elicitation - proceed (fail-open).
         # The destructive ToolAnnotations hint lets clients gate at call time.
         # Only McpError is caught: a malformed elicit() call must not read as
         # "unsupported" and silently skip every confirmation (#27).
@@ -491,7 +491,7 @@ async def server_lifespan(server: FastMCP) -> AsyncIterator[dict[str, Any]]:
     try:
         targets = ", ".join(f"{n}={h}:{p}" for n, (h, p) in get_instances().items())
     except ValueError as exc:
-        # Don't fail startup on a bad config — surface it on the first tool call,
+        # Don't fail startup on a bad config - surface it on the first tool call,
         # matching the previous behaviour for an invalid QGIS_MCP_PORT.
         targets = f"<invalid instance configuration: {exc}>"
     logger.info(f"QgisMCPServer starting up (will connect on first call to: {targets})")
@@ -578,7 +578,7 @@ async def _instance_identity(instance: str) -> dict[str, Any]:
 
     Ports are not identity: two windows of the same version on the same profile
     look alike from the outside. get_qgis_info reports the pid and window title,
-    which do distinguish them. One round-trip and no retries — the same reasoning
+    which do distinguish them. One round-trip and no retries - the same reasoning
     as _probe_instance, whose comment warns that the retry schedule would make
     listing cost ~11s. A failure here must not fail the listing either: an
     instance that answered the probe but not this is still usefully reachable.
@@ -606,8 +606,8 @@ async def _instance_identity(instance: str) -> dict[str, Any]:
 @mcp.tool(
     title="List QGIS Instances",
     annotations=ToolAnnotations(readOnlyHint=True),
-    description="List the configured QGIS instances: name, host, port, reachability, and — for "
-    "each reachable one — which QGIS actually answered (version, process id, window title, "
+    description="List the configured QGIS instances: name, host, port, reachability, and - for "
+    "each reachable one - which QGIS actually answered (version, process id, window title, "
     "profile). Use it to confirm a name maps to the window you mean before writing to it. Pass a "
     "name as the 'instance' argument of any other tool to target that QGIS window; omitting it "
     "targets the instance named 'default', or the first one listed when no instance is called "
@@ -635,7 +635,7 @@ async def list_qgis_instances(ctx: Context) -> dict[str, Any]:
                 instances.items(), reachable, identities, strict=True
             )
         ],
-        # The name a call with no `instance` argument actually resolves to — not
+        # The name a call with no `instance` argument actually resolves to - not
         # the constant "default", which would be a lie whenever no entry carries
         # that name. This is the field an agent reads to learn where its
         # instance-less calls land, so it has to be the resolved value.
@@ -1812,7 +1812,7 @@ async def get_layer_crs(ctx: Context, layer_id: str, instance: str | None = None
 
 @mcp.tool(
     title="Set Layer CRS",
-    description="Set the CRS of a layer (e.g. 'EPSG:4326'). This does NOT reproject data — "
+    description="Set the CRS of a layer (e.g. 'EPSG:4326'). This does NOT reproject data - "
     "it only changes how the layer's coordinates are interpreted.",
 )
 async def set_layer_crs(ctx: Context, layer_id: str, crs: str, instance: str | None = None) -> dict:
@@ -1901,7 +1901,7 @@ async def remove_map_theme(ctx: Context, name: str, instance: str | None = None)
 @mcp.tool(
     title="Apply Map Theme",
     annotations=ToolAnnotations(idempotentHint=True),
-    description="Apply a map theme — restores the layer visibility state saved in the theme.",
+    description="Apply a map theme - restores the layer visibility state saved in the theme.",
 )
 async def apply_map_theme(ctx: Context, name: str, instance: str | None = None) -> dict:
     return await _send("apply_map_theme", {"name": name}, instance=instance)
@@ -1925,7 +1925,7 @@ async def set_project_crs(ctx: Context, crs: str, instance: str | None = None) -
     description="Execute multiple commands in a single round-trip. Each command is "
     '{"type": "<command_name>", "params": {...}}. Destructive commands '
     "(execute_code, remove_layer, delete_features, set_setting, reload_plugin) "
-    "are not allowed in batch — use them individually.",
+    "are not allowed in batch - use them individually.",
 )
 async def batch_commands(
     ctx: Context, commands: list[dict], instance: str | None = None
@@ -1934,7 +1934,7 @@ async def batch_commands(
         cmd_type = cmd.get("type", "")
         if cmd_type in BATCH_BLOCKED_COMMANDS:
             raise ValueError(
-                f"Command {cmd_type!r} is not allowed in batch — "
+                f"Command {cmd_type!r} is not allowed in batch - "
                 "call it individually so confirmation can be requested"
             )
     return await _send("batch", {"commands": commands}, timeout=TIMEOUT_LONG, instance=instance)
@@ -2192,7 +2192,7 @@ async def get_setting(ctx: Context, key: str, instance: str | None = None) -> di
 @mcp.tool(
     title="Set Setting",
     annotations=ToolAnnotations(destructiveHint=True),
-    description="Write a QGIS setting. Use with care — incorrect settings can affect QGIS behavior.",
+    description="Write a QGIS setting. Use with care - incorrect settings can affect QGIS behavior.",
 )
 async def set_setting(ctx: Context, key: str, value: str, instance: str | None = None) -> dict:
     if not await _confirm_destructive(
@@ -2239,7 +2239,7 @@ async def transform_coordinates(
     title="List Connections",
     annotations=ToolAnnotations(readOnlyHint=True),
     description="List the data source connections saved in QGIS (PostgreSQL, GeoPackage, SpatiaLite, "
-    "MS SQL, Oracle, ...) — the Browser panel entries. Optionally filter by provider "
+    "MS SQL, Oracle, ...) - the Browser panel entries. Optionally filter by provider "
     "(e.g. 'postgres', 'ogr', 'spatialite'). Passwords are redacted from the URIs.",
     structured_output=True,
 )
@@ -2254,7 +2254,7 @@ async def list_connections(
     description="Validate and save a new PostgreSQL Browser-panel connection. Credentials must be held in "
     "an existing QGIS Authentication Manager configuration; passwords are never accepted. Fails "
     "if name already exists or the database cannot be reached. port must be the actual database "
-    "port supplied by the caller or user — this tool does not assume a default such as 5432. "
+    "port supplied by the caller or user - this tool does not assume a default such as 5432. "
     "ssl_mode is one of prefer (default), disable, allow, require, verify-ca, or verify-full.",
     structured_output=True,
 )
@@ -2381,7 +2381,7 @@ async def import_layer_to_connection(
     title="Execute Connection SQL",
     annotations=ToolAnnotations(destructiveHint=True),
     description="Run SQL directly on the database behind a saved connection (server-side, not a "
-    "virtual layer — use execute_sql for that). Can modify the database: DDL/DML run as issued. "
+    "virtual layer - use execute_sql for that). Can modify the database: DDL/DML run as issued. "
     "limit caps returned rows (-1 for all).",
 )
 async def execute_connection_sql(
@@ -2903,7 +2903,7 @@ async def duplicate_layer(
     annotations=ToolAnnotations(idempotentHint=True),
     description="Reorder layer tree nodes; tree order is draw order. layer_ids is the ordered "
     "list of layer ids from top (drawn last) to bottom; unlisted layers keep their slots. "
-    "Clears any custom draw order (it freezes a snapshot list — layers added later would "
+    "Clears any custom draw order (it freezes a snapshot list - layers added later would "
     "silently draw behind everything).",
 )
 async def set_layer_order(ctx: Context, layer_ids: list[str], instance: str | None = None) -> dict:
@@ -2918,7 +2918,7 @@ _tool_mode = os.environ.get("QGIS_MCP_TOOL_MODE", "granular")
 if _tool_mode == "compound":
     # Compound tools carry no `instance` parameter, so every call would silently
     # go to the implicit instance while multi-instance config suggested
-    # otherwise — a wrong-instance write with no error is worse than refusing to
+    # otherwise - a wrong-instance write with no error is worse than refusing to
     # start. Refuse the unsupported combination instead; single-instance
     # compound mode is unaffected.
     _compound_instances = get_instances()
@@ -2973,7 +2973,7 @@ def _strip_instance_param() -> None:
     on every tool is pure overhead: it grows the tool list sent on every turn by
     ~17% (45.8k -> 53.7k chars) for the majority of users, who run one QGIS. The
     Python parameter stays and keeps defaulting to None, which resolves to that
-    single instance, so behaviour is identical — only the advertised schema
+    single instance, so behaviour is identical - only the advertised schema
     shrinks. Restored as soon as a second instance is configured.
 
     Same mechanism as _strip_schema_titles() above, and applied after it.
@@ -2983,7 +2983,7 @@ def _strip_instance_param() -> None:
             return
     except ValueError:
         # An invalid configuration surfaces on the first tool call, as in the
-        # lifespan handler — don't decide anything here.
+        # lifespan handler - don't decide anything here.
         return
 
     for tool in mcp._tool_manager._tools.values():
@@ -3002,7 +3002,7 @@ _strip_instance_param()
 
 _completion_cache: list[str] = []
 _completion_cache_at: float = 0.0
-_COMPLETION_TTL: float = 10.0  # seconds — avoids hitting QGIS on every keystroke
+_COMPLETION_TTL: float = 10.0  # seconds - avoids hitting QGIS on every keystroke
 
 
 @mcp.completion()
@@ -3039,7 +3039,7 @@ async def handle_completion(ref, argument: CompletionArgument, context=None):
 # Resource URIs carry no instance segment, so all of these read the implicit
 # instance. With several instances configured that is a silent choice, so each
 # description says which one it reads and points at the tool for the rest.
-_IMPLICIT = " (implicit instance — use the equivalent tool with instance= for another)"
+_IMPLICIT = " (implicit instance - use the equivalent tool with instance= for another)"
 
 
 @mcp.resource(
@@ -3100,22 +3100,22 @@ def layer_schema_resource(layer_id: str) -> str:
 @mcp.resource(
     "qgis://llms.txt",
     name="llms_context",
-    description="Capabilities summary for LLM context — lists all tools, resources, and usage tips",
+    description="Capabilities summary for LLM context - lists all tools, resources, and usage tips",
 )
 def llms_context_resource() -> str:
-    return """# QGIS MCP — LLM Context
+    return """# QGIS MCP - LLM Context
 
 ## Overview
 QGIS MCP connects QGIS Desktop to LLMs via the Model Context Protocol.
 118 tools for project management, layer operations, feature editing, styling, processing, and more.
 
 ## Quick Start
-1. `ping` — verify connectivity
-2. `diagnose` — check full stack health (versions, providers, clients)
-3. `get_project_info` — understand current project
-4. `get_layers` — list available layers
-5. `get_layer_features` — inspect data (expression filtering, pagination)
-6. `render_map` or `get_canvas_screenshot` — see the map
+1. `ping` - verify connectivity
+2. `diagnose` - check full stack health (versions, providers, clients)
+3. `get_project_info` - understand current project
+4. `get_layers` - list available layers
+5. `get_layer_features` - inspect data (expression filtering, pagination)
+6. `render_map` or `get_canvas_screenshot` - see the map
 
 ## Tool Categories
 - **Info**: ping, diagnose, get_qgis_info, get_project_info
@@ -3157,7 +3157,7 @@ QGIS MCP connects QGIS Desktop to LLMs via the Model Context Protocol.
 type "world" in the locator bar (bottom of screen) to find and open it. Via MCP: \
 use `execute_code` to resolve `QgsApplication.pkgDataPath() + "/resources/data/world_map.gpkg"`, \
 then pass that path to `add_vector_layer` to load it as a background for spatial context.
-- **Map themes**: save/restore layer visibility presets — useful for toggling between views.
+- **Map themes**: save/restore layer visibility presets - useful for toggling between views.
 - **Bookmarks**: save named extents for quick navigation to areas of interest.
 
 ## Key Patterns
@@ -3170,31 +3170,31 @@ then pass that path to `add_vector_layer` to load it as a background for spatial
 - Use diagnose to troubleshoot connection or version issues
 
 ## Resources (read-only data)
-- qgis://info — QGIS version info
-- qgis://project — project metadata
-- qgis://layers — all layers
-- qgis://layers/{id}/info — layer details
-- qgis://layers/{id}/features — sample features
-- qgis://layers/{id}/schema — field schema
-- qgis://llms.txt — this context file
+- qgis://info - QGIS version info
+- qgis://project - project metadata
+- qgis://layers - all layers
+- qgis://layers/{id}/info - layer details
+- qgis://layers/{id}/features - sample features
+- qgis://layers/{id}/schema - field schema
+- qgis://llms.txt - this context file
 
 ## Multiple QGIS Instances
 One MCP server can address several running QGIS windows. They are configured with \
 `QGIS_MCP_INSTANCES` (e.g. `default=9876,b=9877`); pass `instance="b"` to any tool to \
 target that window. Omitting the argument targets the instance named `default`. Call \
 `list_qgis_instances` for the configured names, their host/port, and whether each is \
-currently reachable — a name that is not configured is rejected with the valid names.
+currently reachable - a name that is not configured is rejected with the valid names.
 
 ## Environment Variables
-- QGIS_MCP_HOST — server host (default: localhost)
-- QGIS_MCP_PORT — server port (default: 9876)
-- QGIS_MCP_INSTANCES — comma-separated "name=port" or "name=host:port" list of QGIS \
+- QGIS_MCP_HOST - server host (default: localhost)
+- QGIS_MCP_PORT - server port (default: 9876)
+- QGIS_MCP_INSTANCES - comma-separated "name=port" or "name=host:port" list of QGIS \
 instances (default: unset = a single instance named "default" from QGIS_MCP_HOST/PORT)
-- QGIS_MCP_TOKEN — optional shared secret; when set, must match the plugin's value (default: unset = no auth)
-- QGIS_MCP_TRANSPORT — "stdio" (default) or "streamable-http"
-- QGIS_MCP_TOOL_MODE — "granular" (default, 118 tools) or "compound" (27 grouped tools)
-- QGIS_MCP_LOG_FILE — log file path (default: ~/.local/share/qgis-mcp/server.log)
-- QGIS_MCP_LOG_LEVEL — file log level (default: INFO)
+- QGIS_MCP_TOKEN - optional shared secret; when set, must match the plugin's value (default: unset = no auth)
+- QGIS_MCP_TRANSPORT - "stdio" (default) or "streamable-http"
+- QGIS_MCP_TOOL_MODE - "granular" (default, 118 tools) or "compound" (27 grouped tools)
+- QGIS_MCP_LOG_FILE - log file path (default: ~/.local/share/qgis-mcp/server.log)
+- QGIS_MCP_LOG_LEVEL - file log level (default: INFO)
 """
 
 
@@ -3254,7 +3254,7 @@ def create_processing_model_prompt(description: str) -> list[UserMessage]:
                 "Build a QGIS Processing Model that implements this workflow:\n\n"
                 f'"{description}"\n\n'
                 "Call the `create_processing_model` tool ONCE. Algorithm lookup and parameter "
-                "validation happen inside the plugin against QGIS's Processing registry — do NOT "
+                "validation happen inside the plugin against QGIS's Processing registry - do NOT "
                 "call `list_processing_algorithms` or `get_algorithm_help`. For each step pass a "
                 "concise `algorithm` keyword (e.g. 'buffer', 'centroids', 'clip') or a full id; "
                 "if a keyword is ambiguous the tool returns the candidate list so you can retry "

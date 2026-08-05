@@ -16,7 +16,7 @@ jobs:
       matrix:
         include:
           - name: locked
-            # Exactly what uv.lock pins — what contributors and the plugin see
+            # Exactly what uv.lock pins - what contributors and the plugin see
             fresh: false
           - name: unpinned
             # Fresh resolution, like `uvx --from <zip>`: every dependency at its

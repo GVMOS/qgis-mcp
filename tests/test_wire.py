@@ -25,7 +25,7 @@ def _load_wire():
 
     ``qgis_mcp_plugin/__init__.py`` imports the plugin (and therefore ``qgis``),
     so the package cannot be imported outside QGIS. Loading the module file
-    directly is what keeps these helpers unit-testable — and asserts they stay
+    directly is what keeps these helpers unit-testable - and asserts they stay
     free of QGIS imports.
     """
     path = os.path.join(os.path.dirname(__file__), "..", "qgis_mcp_plugin", "wire.py")
@@ -93,7 +93,7 @@ def test_partial_writes_are_requeued_and_resumed():
 
 
 def test_would_block_leaves_remainder_queued_then_resumes():
-    """A full kernel buffer must not lose bytes — the frame resumes exactly where it stopped."""
+    """A full kernel buffer must not lose bytes - the frame resumes exactly where it stopped."""
     payload = frame(b"y" * 5000)
     buf = OutboundBuffer()
     buf.append(payload)

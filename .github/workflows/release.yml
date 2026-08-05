@@ -41,7 +41,7 @@ jobs:
           QGIS_PLUGIN_TOKEN: ${{ secrets.QGIS_PLUGIN_TOKEN }}
         run: |
           if [ -z "$QGIS_PLUGIN_TOKEN" ]; then
-            echo "QGIS_PLUGIN_TOKEN is not set — skipping the Hub upload."
+            echo "QGIS_PLUGIN_TOKEN is not set - skipping the Hub upload."
             exit 0
           fi
           status=$(curl -sS -w '%{http_code}' -o response.txt -X POST \
@@ -55,5 +55,5 @@ jobs:
             echo "::error::Hub upload failed with HTTP $status"
             exit 1
           fi
-          echo "Uploaded. The security scan runs asynchronously — check the Security tab:"
+          echo "Uploaded. The security scan runs asynchronously - check the Security tab:"
           echo "https://plugins.qgis.org/plugins/qgis_mcp_plugin/version/${GITHUB_REF_NAME#v}/"

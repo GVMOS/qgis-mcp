@@ -587,7 +587,7 @@ class FeatureHandlers:
             if lyr.type() != LAYER_VECTOR:
                 if explicit:
                     raise CommandError(
-                        f"Layer '{lyr.name()}' is not a vector layer — cannot be queried"
+                        f"Layer '{lyr.name()}' is not a vector layer - cannot be queried"
                     )
                 continue
             definition.addSource(lyr.name(), lid)

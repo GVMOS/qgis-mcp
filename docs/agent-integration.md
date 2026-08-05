@@ -1,7 +1,7 @@
 # Using QGIS MCP with Agent Clients
 
 QGIS MCP uses the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) over **stdio**
-transport, which makes it compatible with any MCP-capable agent framework — not just Claude.
+transport, which makes it compatible with any MCP-capable agent framework - not just Claude.
 This guide covers how to register the server in various agent environments, including
 Nous/Hermes-style coding agents that support MCP tool-use.
 
@@ -12,7 +12,7 @@ Agent (LLM) ←→ MCP Client ←→ stdio ←→ qgis-mcp-server ←→ TCP soc
 ```
 
 The MCP server is a plain Python process launched by the agent's MCP client.  No special
-Nous-specific API is involved — any agent that can spawn an MCP stdio server and call tools
+Nous-specific API is involved - any agent that can spawn an MCP stdio server and call tools
 can use QGIS MCP.
 
 ---
@@ -24,7 +24,7 @@ can use QGIS MCP.
    - Restart QGIS, then open the QGIS MCP dock widget and click **Start Server**.
    - The plugin listens on `localhost:9876` by default.
 
-2. **[uv](https://docs.astral.sh/uv/getting-started/installation/)** — the Python package
+2. **[uv](https://docs.astral.sh/uv/getting-started/installation/)** - the Python package
    runner used to launch the MCP server without a manual `pip install`.
 
 ---
@@ -114,7 +114,7 @@ Notes:
   overrides the user-level file.
 - Gemini CLI and Qwen Code keep unrelated user settings in the same `settings.json`; the
   installer merges rather than overwrites.
-- Gemini CLI / Qwen Code also ship `gemini mcp add` / `qwen mcp add` — writing the JSON works
+- Gemini CLI / Qwen Code also ship `gemini mcp add` / `qwen mcp add` - writing the JSON works
   even when those binaries are not on `PATH`.
 
 ---
@@ -124,7 +124,7 @@ Notes:
 The [Nous Research portal](https://portal.nousresearch.com/) and Hermes-based agents that
 support MCP tool-use can connect to QGIS MCP just like any other MCP client.
 
-### Step 1 — Identify how your agent loads MCP servers
+### Step 1 - Identify how your agent loads MCP servers
 
 Nous/Hermes agents that support the MCP tool-calling interface typically accept a server
 configuration in one of these forms:
@@ -136,7 +136,7 @@ configuration in one of these forms:
 Consult your specific agent client's documentation for the exact format, then paste in the
 generic JSON block above.
 
-### Step 2 — Verify tool discovery
+### Step 2 - Verify tool discovery
 
 Once the agent starts the MCP server, it should list the available tools.  You can verify
 by asking the agent:
@@ -147,7 +147,7 @@ List the available MCP tools for QGIS.
 
 You should see 118 tools (e.g. `ping`, `get_layers`, `render_map`, …).
 
-### Step 3 — Check the connection
+### Step 3 - Check the connection
 
 Ask the agent to call the `ping` tool:
 
@@ -162,7 +162,7 @@ If QGIS is running with the plugin started you will get `{"pong": true}`.
 ## Hermes desktop app (Windows)
 
 This section documents a verified-working local setup: QGIS on the same Windows machine
-as the **Hermes desktop app**, controlled through the QGIS MCP plugin — no remote box
+as the **Hermes desktop app**, controlled through the QGIS MCP plugin - no remote box
 required.
 
 ### Prerequisites
@@ -186,7 +186,7 @@ ModuleNotFoundError: No module named 'pydantic_core._pydantic_core'
 The fix is a small `.bat` file that clears the venv environment variables before calling
 `uvx`, so the MCP server runs in a clean environment.
 
-### Step 1 — Create the launcher bat file
+### Step 1 - Create the launcher bat file
 
 Create `qgis-mcp-launch.bat` in your Hermes config directory
 (typically `%APPDATA%\Hermes\`):
@@ -206,10 +206,10 @@ Full path example:
 C:\Users\<you>\AppData\Roaming\Hermes\qgis-mcp-launch.bat
 ```
 
-### Step 2 — Register the server in config.yaml
+### Step 2 - Register the server in config.yaml
 
 Hermes stores MCP servers in `config.yaml` (not a separate `mcp.json`).  Open
-`%APPDATA%\Hermes\config.yaml` and add the `mcpServers` block — or merge it in if the file
+`%APPDATA%\Hermes\config.yaml` and add the `mcpServers` block - or merge it in if the file
 already exists:
 
 ```yaml
@@ -221,7 +221,7 @@ mcpServers:
 
 Replace `<you>` with your actual Windows username.
 
-### Step 3 — Verify
+### Step 3 - Verify
 
 1. Restart Hermes after editing `config.yaml`.
 2. Ask Hermes to call the `ping` tool:
@@ -255,7 +255,7 @@ to get the full bat-file content and YAML snippet pre-filled with your local pat
 
 ## Multiple QGIS instances
 
-One MCP server registration can drive several running QGIS windows — no need to register
+One MCP server registration can drive several running QGIS windows - no need to register
 the server once per port.  Start each QGIS with the plugin on its own port, then list them
 in `QGIS_MCP_INSTANCES`:
 
@@ -291,7 +291,7 @@ in `QGIS_MCP_INSTANCES`:
 - **Not supported with `QGIS_MCP_TOOL_MODE=compound`.**  Compound tools carry no `instance`
   argument, so configuring more than one instance in compound mode refuses to start rather
   than silently routing every call to one QGIS.
-- `QGIS_MCP_TOKEN` is shared by all instances — set the same secret in each QGIS.
+- `QGIS_MCP_TOKEN` is shared by all instances - set the same secret in each QGIS.
 
 ---
 
@@ -313,7 +313,7 @@ in `QGIS_MCP_INSTANCES`:
   ```
   It should print nothing and wait (reading MCP messages from stdin). `Ctrl-C` to quit.
 - If you see `ModuleNotFoundError`, `uv`/`uvx` is not installed or not on `PATH`.
-- If you see `Connection refused`, the QGIS plugin is not listening yet — start it first.
+- If you see `Connection refused`, the QGIS plugin is not listening yet - start it first.
 
 ### Agent says "tool call failed" for every command
 
@@ -333,7 +333,7 @@ If the agent cannot spawn subprocesses but can make HTTP requests, set
 
 If your agent has a limited context window or struggles with 104 separate tool schemas,
 enable compound tool mode to reduce the tool count to 27 grouped tools (no loss of
-functionality — every granular command is reachable through an action):
+functionality - every granular command is reachable through an action):
 
 ```json
 {
@@ -349,7 +349,7 @@ functionality — every granular command is reachable through an action):
 
 Each compound tool takes two arguments: `action` (string, required) selects the operation,
 and `params` (object, optional) carries that action's parameters.  Parameters are **not**
-top-level tool arguments — they always go inside `params`:
+top-level tool arguments - they always go inside `params`:
 
 ```json
 {

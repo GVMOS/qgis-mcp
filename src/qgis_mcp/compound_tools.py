@@ -138,7 +138,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
             "- list: limit (int, default 50), offset (int, default 0)\n"
             "- add_vector: path (str), provider (str, default 'ogr'), name (str, optional)\n"
             "- add_raster: path (str), provider (str, default 'gdal'), name (str, optional)\n"
-            "- remove: layer_id (str) — destructive, requires confirmation\n"
+            "- remove: layer_id (str) - destructive, requires confirmation\n"
             "- find: name_pattern (str)\n"
             "- create_memory: name (str), geometry_type (str), crs (str, default 'EPSG:4326'), "
             "fields (list[dict], optional)\n"
@@ -154,15 +154,15 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
             "- set_labeling: layer_id (str), enabled (bool, default true), "
             "field_name (str, optional), font_size (float, optional), color (str, optional)\n"
             "- duplicate: layer_id (str), new_name (str, optional)\n"
-            "- set_order: layer_ids (list[str]) — top to bottom\n"
+            "- set_order: layer_ids (list[str]) - top to bottom\n"
             "- add_web: url (str), service (str: 'xyz', 'wms', 'wfs'), name (str, optional), "
-            "crs (str, optional — only for wms/wfs; XYZ tiles are always EPSG:3857 and "
+            "crs (str, optional - only for wms/wfs; XYZ tiles are always EPSG:3857 and "
             "requesting another CRS is an error)\n"
-            "- export: layer_id (str), output_path (str) — format from extension "
+            "- export: layer_id (str), output_path (str) - format from extension "
             "(.gpkg/.shp/.geojson/.tif); target_crs (str, optional) reprojects, "
             "filter_expression (str, optional) exports a subset\n"
-            "- save_style: layer_id (str), path (str) — write a .qml\n"
-            "- apply_style: layer_id (str), path (str) — load a .qml\n"
+            "- save_style: layer_id (str), path (str) - write a .qml\n"
+            "- apply_style: layer_id (str), path (str) - load a .qml\n"
             "- add_join: target_layer_id (str), join_layer_id (str), target_field (str), "
             "join_field (str), prefix (str, default '')"
             f"{_PARAMS_NOTE}"
@@ -314,12 +314,12 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
             "- get: layer_id (str), limit (int, default 10, max 50), offset (int, default 0), "
             "expression (str, optional), include_geometry (bool, default false)\n"
             "- get_statistics: layer_id (str), field_name (str)\n"
-            "- add: layer_id (str), features (list[dict]) — destructive\n"
-            "- update: layer_id (str), updates (list[dict]) — destructive\n"
+            "- add: layer_id (str), features (list[dict]) - destructive\n"
+            "- update: layer_id (str), updates (list[dict]) - destructive\n"
             "- update_geometry: layer_id (str), updates (list[dict], "
-            "[{fid, geometry_wkt}]) — destructive\n"
+            "[{fid, geometry_wkt}]) - destructive\n"
             "- delete: layer_id (str), fids (list[int], optional), expression (str, optional) "
-            "— destructive, requires confirmation"
+            "- destructive, requires confirmation"
             f"{_PARAMS_NOTE}"
         ),
         annotations=ToolAnnotations(destructiveHint=True),
@@ -434,8 +434,8 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
             "goes to an undoable buffer instead of the data source.\n"
             "Actions: start, commit, rollback, status, undo, redo\n"
             "- start: layer_id (str)\n"
-            "- commit: layer_id (str) — writes the buffer to the data source\n"
-            "- rollback: layer_id (str) — discards it, requires confirmation\n"
+            "- commit: layer_id (str) - writes the buffer to the data source\n"
+            "- rollback: layer_id (str) - discards it, requires confirmation\n"
             "- status: layer_id (str)\n"
             "- undo: layer_id (str), steps (int, default 1)\n"
             "- redo: layer_id (str), steps (int, default 1)"
@@ -479,24 +479,24 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
     @mcp.tool(
         title="Connection",
         description=(
-            "Saved data source connections (PostgreSQL, GeoPackage, SpatiaLite, MS SQL, ...) — "
+            "Saved data source connections (PostgreSQL, GeoPackage, SpatiaLite, MS SQL, ...) - "
             "the QGIS Browser panel entries.\n"
             "Actions: list, create, list_tables, add_layer, import_layer, execute_sql\n"
             "- list: provider (str, optional filter, e.g. 'postgres', 'ogr')\n"
-            "- create: PostgreSQL only — name, host, port, database, auth_config_id (all required); "
+            "- create: PostgreSQL only - name, host, port, database, auth_config_id (all required); "
             "port has no default and must be the actual database port supplied by the caller or user "
             "(do not assume 5432). ssl_mode (str, default 'prefer': "
             "prefer|disable|allow|require|verify-ca|verify-full). Uses an existing QGIS "
             "Authentication Manager configuration and validates before saving\n"
-            "- list_tables: provider (str), connection (str), schema (str, optional — omit on "
+            "- list_tables: provider (str), connection (str), schema (str, optional - omit on "
             "schema-aware providers to get the schema list first)\n"
             "- add_layer: provider (str), connection (str), table (str) + schema (str, optional), "
             "OR sql (str) for a database-side query layer; geometry_column (str, optional), "
             "primary_key (str, optional), name (str, optional)\n"
             "- import_layer: layer_id (str), provider (str), connection (str), table (str), "
-            "schema (str, optional), overwrite (bool, default false) — destructive\n"
+            "schema (str, optional), overwrite (bool, default false) - destructive\n"
             "- execute_sql: provider (str), connection (str), sql (str), limit (int, default 100, "
-            "-1 for all) — runs server-side, can modify the database, requires confirmation"
+            "-1 for all) - runs server-side, can modify the database, requires confirmation"
             f"{_PARAMS_NOTE}"
         ),
         annotations=ToolAnnotations(destructiveHint=True),
@@ -595,12 +595,12 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
             "Layer symbology.\n"
             "Actions: set, set_raster\n"
             "- set: layer_id (str), style_type (str: 'single', 'categorized', 'graduated'), "
-            "field (str, optional — required for categorized/graduated), "
+            "field (str, optional - required for categorized/graduated), "
             "classes (int, default 5), color_ramp (str, default 'Spectral')\n"
             "- set_raster: layer_id (str), style_type (str: 'singleband_pseudocolor', "
             "'singleband_gray', 'multiband_color', 'hillshade'), band (int, default 1), "
             "color_ramp (str, default 'Viridis'), classes (int, default 5), "
-            "min_value/max_value (float, optional — default to band statistics), "
+            "min_value/max_value (float, optional - default to band statistics), "
             "classification (str: continuous|equal_interval|quantile), "
             "interpolation (str: interpolated|discrete|exact), "
             "gradient (str: black_to_white|white_to_black), "
@@ -660,10 +660,10 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
             "- get_extent: no params\n"
             "- set_extent: xmin (float), ymin (float), xmax (float), ymax (float), "
             "crs (str, optional)\n"
-            "- screenshot: no params — returns inline image\n"
+            "- screenshot: no params - returns inline image\n"
             "- screenshot_3d: view_index (int, optional), dpi (int, optional), "
             "pitch (float, optional: 0=top-down, 90=edge-on), distance (float, optional), "
-            "heading (float, optional) — capture an open 3D map view as an inline image\n"
+            "heading (float, optional) - capture an open 3D map view as an inline image\n"
             "- get_scale: no params\n"
             "- set_scale: scale (float, optional), rotation (float, optional)"
             f"{_PARAMS_NOTE}"
@@ -735,11 +735,11 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
             "add_map, add_label, add_legend, add_scalebar, add_picture, add_table, "
             "configure_atlas, export_layout, export_atlas\n"
             "- map: width (int, default 800), height (int, default 600), "
-            "path (str, optional) — returns inline image\n"
+            "path (str, optional) - returns inline image\n"
             "- list_layouts: no params\n"
             "- create_layout: name (str)\n"
             "- get_layout_info: layout_name (str)\n"
-            "- remove_layout: layout_name (str) — destructive\n"
+            "- remove_layout: layout_name (str) - destructive\n"
             "- add_map: layout_name (str), x, y, width, height (float, mm)\n"
             "- add_label: layout_name (str), text (str), x, y, width, height, font_size (int), color (hex)\n"
             "- add_legend: layout_name (str), map_item_id (str, optional), x, y, width, height, title (str)\n"
@@ -820,12 +820,12 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
             "Actions: execute, execute_batch, list_algorithms, get_help, get_providers, "
             "create_model, list_models, run_model\n"
             "- execute: algorithm (str), parameters (dict)\n"
-            "- execute_batch: algorithm (str), parameters_list (list[dict]) — one run per dict, "
+            "- execute_batch: algorithm (str), parameters_list (list[dict]) - one run per dict, "
             "per-run success/error status\n"
             "- list_algorithms: search (str, optional), provider (str, optional)\n"
             "- get_help: algorithm_id (str)\n"
-            "- get_providers: no params — providers with algorithm counts and active status\n"
-            "- list_models: no params — registered Processing models (id, name, group)\n"
+            "- get_providers: no params - providers with algorithm counts and active status\n"
+            "- list_models: no params - registered Processing models (id, name, group)\n"
             "- run_model: model (str: registered id like 'model:myflow', or a .model3 path), "
             "parameters (dict, optional) mapping the model's input names to values; missing "
             "output/sink parameters default to a temporary layer\n"
@@ -834,7 +834,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
             "    inputs: [{name, type, description?, default?, optional?, parent_layer? (field/distance), "
             "options? (enum)}]. Types: vector, feature_source, raster, field, number, integer, distance, "
             "string, boolean, extent, crs, point, file, folder, enum, multiple_layers.\n"
-            "    steps: [{id, algorithm, description?, parameters: {ALG_PARAM: value}}] — 'id' is REQUIRED "
+            "    steps: [{id, algorithm, description?, parameters: {ALG_PARAM: value}}] - 'id' is REQUIRED "
             "and must be unique; 'algorithm' takes a keyword ('buffer') or a full id ('native:buffer').\n"
             "    step parameter values: '@input_name' = model input, '$step_id.OUTPUT' = earlier step "
             "output, '=expression' = QGIS expression, anything else = static literal.\n"
@@ -916,7 +916,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
         description=(
             "Execute arbitrary PyQGIS code.\n"
             "Actions: execute\n"
-            "- execute: code (str) — destructive, requires confirmation"
+            "- execute: code (str) - destructive, requires confirmation"
             f"{_PARAMS_NOTE}"
         ),
         annotations=ToolAnnotations(destructiveHint=True),
@@ -947,7 +947,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
         description=(
             "Execute multiple commands in a single round-trip.\n"
             "Actions: execute\n"
-            "- execute: commands (list[dict]) — each {'type': '<command>', 'params': {...}}. "
+            "- execute: commands (list[dict]) - each {'type': '<command>', 'params': {...}}. "
             "Destructive commands (execute_code, remove_layer, delete_features, set_setting, "
             "reload_plugin) are not allowed in batch."
             f"{_PARAMS_NOTE}"
@@ -963,7 +963,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
                 cmd_type = cmd.get("type", "")
                 if cmd_type in BATCH_BLOCKED_COMMANDS:
                     raise ValueError(
-                        f"Command {cmd_type!r} is not allowed in batch — "
+                        f"Command {cmd_type!r} is not allowed in batch - "
                         "call it individually so confirmation can be requested"
                     )
             return await _send("batch", {"commands": commands}, timeout=TIMEOUT_LONG)
@@ -1018,7 +1018,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
             "Actions: list, get_info, reload\n"
             "- list: enabled_only (bool, default false)\n"
             "- get_info: plugin_name (str)\n"
-            "- reload: plugin_name (str) — destructive"
+            "- reload: plugin_name (str) - destructive"
             f"{_PARAMS_NOTE}"
         ),
         annotations=ToolAnnotations(destructiveHint=True),
@@ -1081,7 +1081,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
             "QGIS settings.\n"
             "Actions: get, set\n"
             "- get: key (str)\n"
-            "- set: key (str), value (str) — destructive, requires confirmation"
+            "- set: key (str), value (str) - destructive, requires confirmation"
             f"{_PARAMS_NOTE}"
         ),
         annotations=ToolAnnotations(destructiveHint=True),
@@ -1112,7 +1112,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
             "Expression validation and evaluation.\n"
             "Actions: validate, evaluate\n"
             "- validate: expression (str), layer_id (str, optional)\n"
-            "- evaluate: expression (str), layer_id (str, optional) — returns scalar result"
+            "- evaluate: expression (str), layer_id (str, optional) - returns scalar result"
             f"{_PARAMS_NOTE}"
         ),
         annotations=ToolAnnotations(readOnlyHint=True),
@@ -1225,7 +1225,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
         description=(
             "Layer properties.\n"
             "Actions: set\n"
-            "- set: layer_id (str), property (str), value (str) — "
+            "- set: layer_id (str), property (str), value (str) - "
             "supported: opacity, name, min_scale, max_scale, scale_visibility"
             f"{_PARAMS_NOTE}"
         ),
@@ -1248,7 +1248,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
             raise ValueError(f"Unknown layer_property action: {action}")
 
     # ------------------------------------------------------------------
-    # 19b. field — schema and attribute editing
+    # 19b. field - schema and attribute editing
     # ------------------------------------------------------------------
 
     @mcp.tool(
@@ -1259,11 +1259,11 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
             "- add: layer_id (str), field_name (str), field_type (str: 'string', 'int', "
             "'double', 'bool', 'date', 'datetime'), length (int, optional), "
             "precision (int, optional)\n"
-            "- delete: layer_id (str), field_name (str) — destructive, requires confirmation\n"
+            "- delete: layer_id (str), field_name (str) - destructive, requires confirmation\n"
             "- rename: layer_id (str), old_name (str), new_name (str)\n"
             "- calculate: layer_id (str), field_name (str), expression (str), "
             "field_type (str, default 'double'), length (int, default 0), "
-            "precision (int, default 0) — creates the field if missing, then populates it\n"
+            "precision (int, default 0) - creates the field if missing, then populates it\n"
             "- unique_values: layer_id (str), field (str), limit (int, default 1000, -1 for all)"
             f"{_PARAMS_NOTE}"
         ),
@@ -1325,7 +1325,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
             raise ValueError(f"Unknown field action: {action}")
 
     # ------------------------------------------------------------------
-    # 19c. analysis — vector/raster analysis operations
+    # 19c. analysis - vector/raster analysis operations
     # ------------------------------------------------------------------
 
     @mcp.tool(
@@ -1335,17 +1335,17 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
             "Actions: spatial_join, zonal_statistics, raster_calculator, sample_raster\n"
             "- spatial_join: target_layer (str), join_layer (str), predicates (list[int], "
             "default [0]: 0=intersects 1=contains 2=equals 3=touches 4=overlaps 5=within "
-            "6=crosses), join_fields (list[str], optional — default all), method (int, "
+            "6=crosses), join_fields (list[str], optional - default all), method (int, "
             "default 1: 0=one-to-many 1=first match 2=largest overlap), prefix (str, "
-            "default ''), output_path (str, optional — omit for an in-memory layer)\n"
+            "default ''), output_path (str, optional - omit for an in-memory layer)\n"
             "- zonal_statistics: polygon_layer (str), raster_layer (str), band (int, default 1), "
             "prefix (str, default '_'), stats (list[int], default [0,1,2]: 0=count 1=sum 2=mean "
             "3=median 4=stdev 5=min 6=max 7=range 8=minority 9=majority 10=variety 11=variance), "
-            "output_path (str, optional — omit for an in-memory layer)\n"
+            "output_path (str, optional - omit for an in-memory layer)\n"
             "- raster_calculator: expression (str, reference bands as 'LayerName@band'), "
-            "output_path (str, GeoTIFF), reference_layer (str, optional — grid/extent source)\n"
+            "output_path (str, GeoTIFF), reference_layer (str, optional - grid/extent source)\n"
             "- sample_raster: raster_layer (str), points (list[[x, y]] in the raster CRS), "
-            "band (int, optional — omit to sample all bands)"
+            "band (int, optional - omit to sample all bands)"
             f"{_PARAMS_NOTE}"
         ),
     )
@@ -1417,7 +1417,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
             "- list: no params\n"
             "- add: name (str), xmin (float), ymin (float), xmax (float), ymax (float), "
             "crs (str, default 'EPSG:4326'), group (str, optional)\n"
-            "- remove: bookmark_id (str) — destructive"
+            "- remove: bookmark_id (str) - destructive"
             f"{_PARAMS_NOTE}"
         ),
         annotations=ToolAnnotations(destructiveHint=True),
@@ -1456,9 +1456,9 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
             "Map themes (visibility presets).\n"
             "Actions: list, add, remove, apply\n"
             "- list: no params\n"
-            "- add: name (str) — saves current visibility state\n"
-            "- remove: name (str) — destructive\n"
-            "- apply: name (str) — restores saved visibility state"
+            "- add: name (str) - saves current visibility state\n"
+            "- remove: name (str) - destructive\n"
+            "- apply: name (str) - restores saved visibility state"
             f"{_PARAMS_NOTE}"
         ),
         annotations=ToolAnnotations(destructiveHint=True),

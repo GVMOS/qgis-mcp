@@ -1,6 +1,6 @@
 # QGIS MCP
 
-Connect [QGIS](https://qgis.org/) to [Claude AI](https://claude.ai/) through the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/), enabling Claude to directly control QGIS — manage layers, edit features, run processing algorithms, render maps, and more.
+Connect [QGIS](https://qgis.org/) to [Claude AI](https://claude.ai/) through the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/), enabling Claude to directly control QGIS - manage layers, edit features, run processing algorithms, render maps, and more.
 
 118 MCP tools covering layer management, feature editing, processing, rendering, styling, layout & atlas authoring, cross-layer SQL, plugin development, and system management. Compatible with QGIS 3.28–4.x. Works with Claude Code, Codex CLI, Gemini CLI, Qwen Code, Kimi Code CLI, GitHub Copilot CLI, opencode, LM Studio, Claude Desktop, Cursor, VS Code, Windsurf, Zed, and more.
 
@@ -10,8 +10,8 @@ Connect [QGIS](https://qgis.org/) to [Claude AI](https://claude.ai/) through the
 Claude ←→ MCP Server (FastMCP) ←→ TCP socket ←→ QGIS Plugin (QTimer) ←→ PyQGIS API
 ```
 
-1. **QGIS Plugin** (`qgis_mcp_plugin/`) — Runs inside QGIS. Non-blocking TCP socket server that processes JSON commands within QGIS's event loop.
-2. **MCP Server** (`src/qgis_mcp/server.py`) — Runs outside QGIS. Exposes QGIS operations as MCP tools via [FastMCP](https://gofastmcp.com/).
+1. **QGIS Plugin** (`qgis_mcp_plugin/`) - Runs inside QGIS. Non-blocking TCP socket server that processes JSON commands within QGIS's event loop.
+2. **MCP Server** (`src/qgis_mcp/server.py`) - Runs outside QGIS. Exposes QGIS operations as MCP tools via [FastMCP](https://gofastmcp.com/).
 
 ## Installation
 
@@ -112,7 +112,7 @@ in the working directory overrides it for that project.
 }
 ```
 
-Kimi has no `mcp add` subcommand — edit the JSON or use the `/mcp-config` TUI.
+Kimi has no `mcp add` subcommand - edit the JSON or use the `/mcp-config` TUI.
 
 </details>
 
@@ -174,9 +174,9 @@ Add to `opencode.json` at your project root:
 <details>
 <summary>Hermes desktop app (Windows)</summary>
 
-Hermes stores MCP servers in `config.yaml` under an `mcpServers` block. A standalone `mcp.json` is **ignored**. You also need a small `.bat` launcher — running `uvx` directly inside Hermes causes a venv conflict (`ModuleNotFoundError: No module named 'pydantic_core._pydantic_core'`).
+Hermes stores MCP servers in `config.yaml` under an `mcpServers` block. A standalone `mcp.json` is **ignored**. You also need a small `.bat` launcher - running `uvx` directly inside Hermes causes a venv conflict (`ModuleNotFoundError: No module named 'pydantic_core._pydantic_core'`).
 
-**Step 1 — Create `%APPDATA%\Hermes\qgis-mcp-launch.bat`:**
+**Step 1 - Create `%APPDATA%\Hermes\qgis-mcp-launch.bat`:**
 
 ```batch
 @echo off
@@ -187,7 +187,7 @@ set PYTHONHOME=
 uvx --from "https://github.com/nkarasiak/qgis-mcp/archive/refs/heads/main.zip" qgis-mcp-server
 ```
 
-**Step 2 — Add to `%APPDATA%\Hermes\config.yaml`:**
+**Step 2 - Add to `%APPDATA%\Hermes\config.yaml`:**
 
 ```yaml
 mcpServers:
@@ -240,7 +240,7 @@ To configure manually, add to your `opencode.json` or global opencode config:
 ```
 
 Any other agent or client that supports the MCP stdio transport can also use this server.
-Generic config (exact key names vary by client — see your agent's docs):
+Generic config (exact key names vary by client - see your agent's docs):
 
 ```json
 {
@@ -256,7 +256,7 @@ Generic config (exact key names vary by client — see your agent's docs):
 }
 ```
 
-After starting the agent, verify by asking it to call the `ping` tool — it
+After starting the agent, verify by asking it to call the `ping` tool - it
 should return `{"pong": true}` when the QGIS plugin is running.
 
 For a full setup guide, troubleshooting steps, and compound-tool mode configuration see
@@ -287,8 +287,8 @@ Add to your client's MCP config file:
 
 ## Usage
 
-1. **Start the plugin** — In QGIS, click the MCP toolbar button (or `Plugins` > `QGIS MCP`) and click "Start Server"
-2. **Talk to Claude** — The MCP tools will appear automatically. Ask Claude to work with your QGIS project.
+1. **Start the plugin** - In QGIS, click the MCP toolbar button (or `Plugins` > `QGIS MCP`) and click "Start Server"
+2. **Talk to Claude** - The MCP tools will appear automatically. Ask Claude to work with your QGIS project.
 
 ### Example prompt
 
@@ -304,14 +304,14 @@ You have access to QGIS tools. Do the following:
 
 ## Updating
 
-The plugin (inside QGIS) and the MCP server (outside QGIS) must stay in sync — a newer server sending a command the older plugin doesn't know will return an error. Run `diagnose` after any update to verify both sides match.
+The plugin (inside QGIS) and the MCP server (outside QGIS) must stay in sync - a newer server sending a command the older plugin doesn't know will return an error. Run `diagnose` after any update to verify both sides match.
 
 | Component | Remote install | Local install (`git clone`) |
 |-----------|---------------|----------------------------|
-| **QGIS plugin** | `Plugins` > `Manage and Install Plugins` > Update | Same — Plugin Manager picks up the new version from QGIS Hub |
-| **MCP server** | uvx caches the downloaded archive — force an update with `uvx --refresh-package qgis-mcp --from https://github.com/nkarasiak/qgis-mcp/archive/refs/heads/main.zip qgis-mcp-server`, then restart your MCP client | `git pull` then restart the MCP server process |
+| **QGIS plugin** | `Plugins` > `Manage and Install Plugins` > Update | Same - Plugin Manager picks up the new version from QGIS Hub |
+| **MCP server** | uvx caches the downloaded archive - force an update with `uvx --refresh-package qgis-mcp --from https://github.com/nkarasiak/qgis-mcp/archive/refs/heads/main.zip qgis-mcp-server`, then restart your MCP client | `git pull` then restart the MCP server process |
 
-To auto-update instead, add `--refresh-package qgis-mcp` before `--from` in the configs above: uvx then re-resolves this package from GitHub on every launch. **Warning:** this requires network at launch — the MCP server fails to start when offline — and adds ~1–3s to startup. The plain configs above use the cached version and work offline.
+To auto-update instead, add `--refresh-package qgis-mcp` before `--from` in the configs above: uvx then re-resolves this package from GitHub on every launch. **Warning:** this requires network at launch - the MCP server fails to start when offline - and adds ~1–3s to startup. The plain configs above use the cached version and work offline.
 
 After updating the plugin, click **Stop / Start** in the QGIS MCP dock widget (or reload via `Plugins` > `QGIS MCP` > `Reload Plugin`) to load the new code without restarting QGIS.
 
@@ -325,7 +325,7 @@ After updating the plugin, click **Stop / Start** in the QGIS MCP dock widget (o
 | **Fields** | `add_field`, `delete_field`, `rename_field`, `field_calculator` |
 | **Editing** | `start_editing`, `commit_edits`, `rollback_edits`, `get_edit_status`, `undo_edits`, `redo_edits` |
 | **Styling** | `set_layer_style` (single, categorized, graduated), `set_raster_style` (pseudocolor, gray, RGB, hillshade), `apply_style_qml`, `save_style_qml`, `get_layer_labeling`, `set_layer_labeling` |
-| **Connections** | `list_connections`, `create_postgresql_connection`, `list_connection_tables`, `add_layer_from_connection`, `import_layer_to_connection`, `execute_connection_sql` — `create_postgresql_connection` requires the real database port; it does not assume `5432` |
+| **Connections** | `list_connections`, `create_postgresql_connection`, `list_connection_tables`, `add_layer_from_connection`, `import_layer_to_connection`, `execute_connection_sql` - `create_postgresql_connection` requires the real database port; it does not assume `5432` |
 | **Rendering** | `render_map`, `get_canvas_screenshot`, `get_3d_screenshot`, `get_canvas_extent`, `set_canvas_extent`, `get_canvas_scale`, `set_canvas_scale` |
 | **Bookmarks & themes** | `add_bookmark`, `get_bookmarks`, `remove_bookmark`, `add_map_theme`, `get_map_themes`, `apply_map_theme`, `remove_map_theme` |
 | **Processing** | `execute_processing`, `execute_processing_batch`, `list_processing_algorithms`, `get_algorithm_help`, `get_processing_providers`, `create_processing_model`, `list_processing_models`, `run_model` |
@@ -370,10 +370,10 @@ Groups: `system`, `project`, `layer`, `features`, `selection`, `style`, `canvas`
 
 ### Authentication
 
-By default the socket has **no authentication** — it binds to `localhost` only, but any process on the machine that can reach the port can drive QGIS (including `execute_code`, which runs arbitrary PyQGIS). For shared or multi-user machines, set a shared secret so only callers that know it can connect:
+By default the socket has **no authentication** - it binds to `localhost` only, but any process on the machine that can reach the port can drive QGIS (including `execute_code`, which runs arbitrary PyQGIS). For shared or multi-user machines, set a shared secret so only callers that know it can connect:
 
 1. Set `QGIS_MCP_TOKEN` in the **environment QGIS runs in** (so the plugin enforces it), then Stop/Start the server in the dock. The QGIS log shows `Token authentication ENABLED`.
-2. Set the **same** value in the MCP server's environment — add it to the `env` block of your MCP client config:
+2. Set the **same** value in the MCP server's environment - add it to the `env` block of your MCP client config:
 
    ```json
    {
@@ -407,12 +407,12 @@ One server registration can drive several running QGIS windows. Start each QGIS 
 }
 ```
 
-- Every tool takes an optional `instance` argument (`get_layers(instance="planning")`). Omitting it targets the entry named `default`, or — when no entry is called `default` — the **first** entry listed, so `planning=9877,archive=9878` works without renaming anything.
+- Every tool takes an optional `instance` argument (`get_layers(instance="planning")`). Omitting it targets the entry named `default`, or - when no entry is called `default` - the **first** entry listed, so `planning=9877,archive=9878` works without renaming anything.
 - `list_qgis_instances` returns the configured names with their host, port, and current reachability. An unknown name is rejected with the list of valid names.
 - Instance names match `[A-Za-z0-9_-]+`; entries without a host use `QGIS_MCP_HOST` (default `localhost`).
 - Each instance has its own pooled connection and its own lock, so two QGIS windows can be driven concurrently.
 - **Not supported with `QGIS_MCP_TOOL_MODE=compound`.** Compound tools carry no `instance` argument, so every call would silently hit one instance; configuring more than one instance in compound mode refuses to start rather than routing writes to the wrong QGIS.
-- When `QGIS_MCP_INSTANCES` is unset, exactly one instance named `default` is defined from `QGIS_MCP_HOST`/`QGIS_MCP_PORT` — existing setups are unaffected.
+- When `QGIS_MCP_INSTANCES` is unset, exactly one instance named `default` is defined from `QGIS_MCP_HOST`/`QGIS_MCP_PORT` - existing setups are unaffected.
 - `QGIS_MCP_TOKEN` is shared across instances: the same secret must be set in every QGIS.
 
 ## Contributing
@@ -427,10 +427,10 @@ python install.py   # symlinks plugin + configures your MCP client
 
 Known client names: `claude-desktop`, `cursor`, `vscode`, `windsurf`, `zed`, `claude-code`, `codex`, `opencode`, `hermes`, `kimi`, `gemini`, `qwen`, `copilot-cli`, `lmstudio`.
 
-> **Windows (Microsoft Store / MSIX Claude Desktop):** `install.py` uses `--directory` instead of `cwd` in generated configs. This is required for Store-installed Claude Desktop, which runs MCP servers in an MSIX sandbox that silently drops `cwd`. If you configure manually, use `uv --directory "/path/to/qgis-mcp" run --no-sync src/qgis_mcp/server.py` — this works on both MSIX and standalone installs. You can identify a Store install when the config file is under `%LOCALAPPDATA%\Packages\Claude_<id>\LocalCache\Roaming\Claude\` instead of `%APPDATA%\Claude\`.
+> **Windows (Microsoft Store / MSIX Claude Desktop):** `install.py` uses `--directory` instead of `cwd` in generated configs. This is required for Store-installed Claude Desktop, which runs MCP servers in an MSIX sandbox that silently drops `cwd`. If you configure manually, use `uv --directory "/path/to/qgis-mcp" run --no-sync src/qgis_mcp/server.py` - this works on both MSIX and standalone installs. You can identify a Store install when the config file is under `%LOCALAPPDATA%\Packages\Claude_<id>\LocalCache\Roaming\Claude\` instead of `%APPDATA%\Claude\`.
 
 ```bash
-# Unit tests (no QGIS needed — mocked socket)
+# Unit tests (no QGIS needed - mocked socket)
 uv run --no-sync pytest tests/test_mcp_tools.py -v
 
 # Integration tests (requires QGIS plugin running)
@@ -441,5 +441,5 @@ uv run --no-sync pytest tests/test_qgis_live.py -v
 
 This project is dual-licensed. Each component is distributed under its own license:
 
-- **QGIS Plugin** (`qgis_mcp_plugin/`) — [GNU GPL v2 or later](qgis_mcp_plugin/LICENSE)
-- **MCP Server** (`src/qgis_mcp/`) — [MIT](src/qgis_mcp/LICENSE)
+- **QGIS Plugin** (`qgis_mcp_plugin/`) - [GNU GPL v2 or later](qgis_mcp_plugin/LICENSE)
+- **MCP Server** (`src/qgis_mcp/`) - [MIT](src/qgis_mcp/LICENSE)

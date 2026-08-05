@@ -91,7 +91,7 @@ class CanvasHandlers:
             ms.setOutputDpi(96)
 
             # Enable geometry simplification (matches QGIS canvas defaults).
-            # Skips sub-pixel vertices — critical for large datasets at small scales.
+            # Skips sub-pixel vertices - critical for large datasets at small scales.
             simplify = QgsVectorSimplifyMethod()
             simplify.setSimplifyHints(SIMPLIFY_GEOMETRY | SIMPLIFY_ANTIALIAS)
             simplify.setThreshold(1.0)  # 1 pixel
@@ -135,7 +135,7 @@ class CanvasHandlers:
             return {"base64_data": b64, "mime_type": "image/png", "width": width, "height": height}
 
         except CommandError:
-            raise  # the render timeout above — don't re-wrap a deliberate message
+            raise  # the render timeout above - don't re-wrap a deliberate message
         except Exception as e:
             raise CommandError(f"Render error: {e!s}") from e
 
@@ -200,7 +200,7 @@ class CanvasHandlers:
         map_settings = Qgs3DMapSettings(canvas3d.mapSettings())
         pose = canvas3d.cameraController().cameraPose()
 
-        # Optional camera overrides — applied only to this captured copy, so the
+        # Optional camera overrides - applied only to this captured copy, so the
         # live 3D view is left untouched.
         if pitch is not None:
             pose.setPitchAngle(max(0.0, min(float(pitch), 90.0)))

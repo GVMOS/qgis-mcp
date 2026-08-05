@@ -1,7 +1,7 @@
 """Static guard: the plugin must stay importable and runnable on Python 3.9.
 
 QGIS bundles its own interpreter, and that is still Python 3.9 well past the
-plugin's 3.28 minimum — QGIS 3.42 ships 3.9. The test suite runs on 3.12, so
+plugin's 3.28 minimum - QGIS 3.42 ships 3.9. The test suite runs on 3.12, so
 nothing here is caught at runtime: a PEP 604 union inside isinstance() imports
 cleanly on CI and raises TypeError on a real QGIS install. That is exactly how
 ``isinstance(value, int | float | ...)`` shipped and broke every feature read.
@@ -18,7 +18,7 @@ def _plugin_sources():
 
     Walks the tree rather than listing one directory: the handlers moved into
     ``qgis_mcp_plugin/handlers/`` and a non-recursive listing skipped them
-    silently, which is the worst possible failure for a guard like this — most
+    silently, which is the worst possible failure for a guard like this - most
     of the command code would have gone unchecked while the tests stayed green.
     """
     for root, dirs, files in os.walk(PLUGIN_DIR):
@@ -55,7 +55,7 @@ def test_no_pep604_unions_in_isinstance():
             ):
                 offenders.append(f"{name}:{node.lineno}")
     assert not offenders, (
-        "PEP 604 union inside isinstance/issubclass — raises TypeError on the "
+        "PEP 604 union inside isinstance/issubclass - raises TypeError on the "
         f"Python 3.9 QGIS bundles. Use the tuple form. Found at: {offenders}"
     )
 
@@ -83,7 +83,7 @@ def test_no_runtime_evaluated_pep604_annotations():
                     offenders.append(f"{name}:{node.lineno} ({node.name})")
     assert not offenders, (
         "PEP 604 union in a signature of a module lacking "
-        f"`from __future__ import annotations` — fails to import on 3.9: {offenders}"
+        f"`from __future__ import annotations` - fails to import on 3.9: {offenders}"
     )
 
     # keyword arguments added to builtins after 3.9 -> "takes no keyword arguments"
@@ -97,7 +97,7 @@ NEWER_THAN_39_KWARGS = {
 def test_no_post_39_builtin_keyword_arguments():
     """`zip(a, b, strict=True)` raises TypeError on 3.9.
 
-    Not a syntax error and not an import error — it fails only when that line
+    Not a syntax error and not an import error - it fails only when that line
     executes, which is why `set_layer_order` and `set_raster_style` shipped
     broken while the suite stayed green on 3.12.
     """
@@ -113,7 +113,7 @@ def test_no_post_39_builtin_keyword_arguments():
                 if kw.arg in banned:
                     offenders.append(f"{name}:{node.lineno} {node.func.id}({kw.arg}=)")
     assert not offenders, (
-        "builtin keyword argument newer than Python 3.9 — TypeError on the "
+        "builtin keyword argument newer than Python 3.9 - TypeError on the "
         f"interpreter QGIS bundles. Found: {offenders}"
     )
 

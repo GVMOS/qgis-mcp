@@ -1,4 +1,4 @@
-"""TDD-oriented tests — regression guards, boundary conditions, failure modes.
+"""TDD-oriented tests - regression guards, boundary conditions, failure modes.
 
 Each test documents a specific bug, edge case, or invariant that must hold.
 Requires a running QGIS instance with the MCP plugin on localhost:9876.
@@ -10,7 +10,7 @@ Usage:
 import uuid
 
 # ---------------------------------------------------------------------------
-# Layer lifecycle — creation, mutation, deletion invariants
+# Layer lifecycle - creation, mutation, deletion invariants
 # ---------------------------------------------------------------------------
 
 
@@ -82,7 +82,7 @@ class TestLayerLifecycle:
 
 
 # ---------------------------------------------------------------------------
-# Feature CRUD — add, read, update, delete invariants
+# Feature CRUD - add, read, update, delete invariants
 # ---------------------------------------------------------------------------
 
 
@@ -264,7 +264,7 @@ class TestSelectionInvariants:
 
 
 # ---------------------------------------------------------------------------
-# Expression validation — boundary cases
+# Expression validation - boundary cases
 # ---------------------------------------------------------------------------
 
 
@@ -276,7 +276,7 @@ class TestExpressions:
         # The key is it doesn't crash
 
     def test_sql_injection_in_expression(self, client, cities_layer):
-        """Expressions go through QGIS's parser, not SQL — ensure no crash."""
+        """Expressions go through QGIS's parser, not SQL - ensure no crash."""
         resp = client.send_command(
             "get_layer_features",
             {"layer_id": cities_layer, "expression": "'; DROP TABLE --", "limit": 1},
@@ -305,7 +305,7 @@ class TestExpressions:
 
 
 # ---------------------------------------------------------------------------
-# Pagination — offset/limit boundary conditions
+# Pagination - offset/limit boundary conditions
 # ---------------------------------------------------------------------------
 
 
@@ -344,7 +344,7 @@ class TestPagination:
 
 
 # ---------------------------------------------------------------------------
-# Styling — idempotency and error handling
+# Styling - idempotency and error handling
 # ---------------------------------------------------------------------------
 
 
@@ -363,7 +363,7 @@ class TestStylingRobustness:
             "set_layer_style",
             {"layer_id": cities_layer, "style_type": "graduated", "field": "name", "classes": 3},
         )
-        # May succeed (QGIS casts) or error — must not crash
+        # May succeed (QGIS casts) or error - must not crash
         assert resp["status"] in ("success", "error")
 
     def test_labeling_roundtrip(self, client, cities_layer):
@@ -383,7 +383,7 @@ class TestStylingRobustness:
 
 
 # ---------------------------------------------------------------------------
-# Canvas state — set/get consistency
+# Canvas state - set/get consistency
 # ---------------------------------------------------------------------------
 
 
@@ -394,7 +394,7 @@ class TestCanvasState:
         resp = client.send_command("get_canvas_extent")
         assert resp["status"] == "success"
         r = resp["result"]
-        # Canvas may adjust for aspect ratio — check center is preserved
+        # Canvas may adjust for aspect ratio - check center is preserved
         cx = (r["xmin"] + r["xmax"]) / 2
         cy = (r["ymin"] + r["ymax"]) / 2
         assert abs(cx - 15) < 5, f"Center X drifted: {cx}"
@@ -416,7 +416,7 @@ class TestCanvasState:
 
 
 # ---------------------------------------------------------------------------
-# Project variables — type preservation
+# Project variables - type preservation
 # ---------------------------------------------------------------------------
 
 
@@ -445,7 +445,7 @@ class TestProjectVariables:
 
 
 # ---------------------------------------------------------------------------
-# Bookmarks — CRUD invariants
+# Bookmarks - CRUD invariants
 # ---------------------------------------------------------------------------
 
 
@@ -476,7 +476,7 @@ class TestBookmarkInvariants:
 
 
 # ---------------------------------------------------------------------------
-# Batch — error isolation
+# Batch - error isolation
 # ---------------------------------------------------------------------------
 
 
@@ -507,7 +507,7 @@ class TestBatchErrorIsolation:
 
 
 # ---------------------------------------------------------------------------
-# CRS transforms — edge cases
+# CRS transforms - edge cases
 # ---------------------------------------------------------------------------
 
 
@@ -543,7 +543,7 @@ class TestCRSEdgeCases:
 
 
 # ---------------------------------------------------------------------------
-# Error messages — must be human-readable
+# Error messages - must be human-readable
 # ---------------------------------------------------------------------------
 
 

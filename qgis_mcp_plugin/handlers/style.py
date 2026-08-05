@@ -1,4 +1,4 @@
-"""Handlers for layer symbology — vector renderers and raster renderers.
+"""Handlers for layer symbology - vector renderers and raster renderers.
 
 Both handlers are a table of renderer builders plus a common tail (apply the
 renderer, repaint, refresh the legend).
@@ -55,7 +55,7 @@ class StyleHandlers:
 
     @staticmethod
     def _field_index(layer, field, style_type):
-        """Index of *field* on *layer*, or raise — both classified styles need it."""
+        """Index of *field* on *layer*, or raise - both classified styles need it."""
         if not field:
             raise CommandError(f"field is required for {style_type} style")
         idx = layer.fields().indexOf(field)
@@ -149,7 +149,7 @@ class StyleHandlers:
         return float(lo), float(hi)
 
     # style_type -> renderer builder. Each takes the provider, a band-range
-    # checker and the styling options, and returns (renderer, applied) — what
+    # checker and the styling options, and returns (renderer, applied) - what
     # was actually used, which the response reports back. Applying the renderer
     # and refreshing is common to all four and stays in the handler.
     _RASTER_STYLES: ClassVar[dict] = {
@@ -160,7 +160,7 @@ class StyleHandlers:
     }
 
     def _contrast_enhancement(self, provider, band, lo, hi, contrast):
-        """A configured contrast enhancement — gray and multiband both need one."""
+        """A configured contrast enhancement - gray and multiband both need one."""
         enhancement = QgsContrastEnhancement(provider.dataType(band))
         enhancement.setContrastEnhancementAlgorithm(
             self._pick(self._CONTRAST_ALGORITHMS, contrast, "contrast")

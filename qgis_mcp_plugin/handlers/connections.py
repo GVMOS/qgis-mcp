@@ -40,7 +40,7 @@ from ..registry import command
 
 
 class ConnectionHandlers:
-    """Saved data source connections — the Browser panel entries."""
+    """Saved data source connections - the Browser panel entries."""
 
     # Connection URIs carry saved credentials; never hand those to a client.
     _URI_SECRET_RE = re.compile(r"\b(password|pass|pwd)=('[^']*'|\"[^\"]*\"|\S*)", re.IGNORECASE)

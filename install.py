@@ -272,14 +272,14 @@ def _hermes_instructions(remote: bool) -> None:
     bat_content = _hermes_bat_content(remote)
 
     print()
-    print("  Hermes desktop app (Windows) — manual setup required:")
+    print("  Hermes desktop app (Windows) - manual setup required:")
     print()
-    print(f"  Step 1 — Create the launcher: {bat_path}")
+    print(f"  Step 1 - Create the launcher: {bat_path}")
     print()
     for line in bat_content.splitlines():
         print(f"    {line}")
     print()
-    print(f"  Step 2 — Add to {cfg_path}:")
+    print(f"  Step 2 - Add to {cfg_path}:")
     print()
     bat_escaped = str(bat_path).replace("\\", "\\\\")
     print("    mcpServers:")
@@ -294,7 +294,7 @@ def _hermes_instructions(remote: bool) -> None:
 
 
 def _remove_target(target: Path) -> None:
-    """Remove a plugin target — handles files, symlinks, Windows junctions, and dirs.
+    """Remove a plugin target - handles files, symlinks, Windows junctions, and dirs.
 
     Path.is_symlink() returns False for Windows directory junctions (created via
     `mklink /J`), so we also check os.path.islink() and fall back to rmdir() for
@@ -402,7 +402,7 @@ def configure_client(client_name: str, remote: bool) -> None:
     registry = _client_registry()
     info = registry[client_name]
 
-    # Hermes desktop app: YAML config + bat launcher — print instructions only
+    # Hermes desktop app: YAML config + bat launcher - print instructions only
     if info.get("entry_format") == "hermes":
         _hermes_instructions(remote)
         return
@@ -481,7 +481,7 @@ def unconfigure_client(client_name: str) -> None:
     registry = _client_registry()
     info = registry[client_name]
 
-    # Hermes: manual YAML edit required — just advise the user
+    # Hermes: manual YAML edit required - just advise the user
     if info.get("entry_format") == "hermes":
         hermes_cfg = info.get("hermes_cfg")
         cfg_hint = str(hermes_cfg) if hermes_cfg else "%APPDATA%\\Hermes\\config.yaml"

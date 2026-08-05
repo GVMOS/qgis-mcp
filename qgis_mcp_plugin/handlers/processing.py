@@ -49,7 +49,7 @@ class _ResponsiveFeedback(QgsProcessingFeedback):
     """Processing feedback that keeps the GUI alive and enforces a deadline.
 
     ``processing.run()`` is synchronous and, called straight from the server's
-    timer callback, blocks Qt's event loop for its whole duration — the QGIS
+    timer callback, blocks Qt's event loop for its whole duration - the QGIS
     window freezes under the user's cursor, which defeats the point of driving a
     live instance they can also touch. Pumping the event loop on each progress
     report keeps the UI responsive and gives the algorithm a cancellation point.
@@ -95,8 +95,8 @@ class _ResponsiveFeedback(QgsProcessingFeedback):
 class ProcessingHandlers:
     """Processing algorithms, models and the analysis commands built on them."""
 
-    # Below the client's TIMEOUT_LONG (60s) so the plugin gives up — and says
-    # why — before the client abandons the request and leaves QGIS still working.
+    # Below the client's TIMEOUT_LONG (60s) so the plugin gives up - and says
+    # why - before the client abandons the request and leaves QGIS still working.
     _PROCESSING_TIMEOUT = 55
 
     @command
@@ -632,7 +632,7 @@ class ProcessingHandlers:
             registry = QgsApplication.processingRegistry()
             alg = registry.algorithmById(model)
             # Registered model ids carry a "model:" prefix, but callers see the
-            # bare name in create_processing_model's response — accept both.
+            # bare name in create_processing_model's response - accept both.
             if alg is None and isinstance(model, str) and not model.startswith("model:"):
                 prefixed = f"model:{model}"
                 alg = registry.algorithmById(prefixed)

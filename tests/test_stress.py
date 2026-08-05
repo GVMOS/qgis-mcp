@@ -1,4 +1,4 @@
-"""Stress tests for QGIS MCP — run before cutting a release.
+"""Stress tests for QGIS MCP - run before cutting a release.
 
 Requires a running QGIS instance with the MCP plugin enabled on localhost:9876.
 Exercises all tool categories end-to-end: project, layers, features, styling,
@@ -790,7 +790,7 @@ class TestHeavyLoad:
     """Sustained throughput and large data volume tests."""
 
     def test_200_sequential_commands(self, client, cities_layer):
-        """200 commands on a single connection — throughput and stability."""
+        """200 commands on a single connection - throughput and stability."""
         t0 = time.perf_counter()
         for i in range(200):
             if i % 3 == 0:
@@ -804,7 +804,7 @@ class TestHeavyLoad:
             assert resp["status"] == "success", f"Failed at iteration {i}: {resp}"
         elapsed = time.perf_counter() - t0
         # Should complete well within 30s on loopback
-        assert elapsed < 30, f"200 commands took {elapsed:.1f}s — too slow"
+        assert elapsed < 30, f"200 commands took {elapsed:.1f}s - too slow"
 
     def test_bulk_feature_insert_and_delete(self, client, test_project):
         """Insert 500 features, verify, then delete them all."""
@@ -933,7 +933,7 @@ class TestHeavyLoad:
         c.disconnect()
 
     def test_ten_connect_disconnect_cycles(self):
-        """Rapid connect/disconnect — plugin should handle without leaking."""
+        """Rapid connect/disconnect - plugin should handle without leaking."""
         for _ in range(10):
             c = make_client()
             r = c.send_command("ping")

@@ -7,7 +7,7 @@ import it without QGIS. Must stay Python 3.9-compatible (see
 Why this exists: every handler used to ``raise Exception(...)``, and the
 dispatcher caught bare ``Exception``. A plugin bug (``TypeError`` from a
 signature change, ``AttributeError`` from a renamed PyQGIS method) therefore
-came back to the client looking exactly like "Layer not found" — no traceback
+came back to the client looking exactly like "Layer not found" - no traceback
 anywhere, and nothing in the response to tell the two apart. Handlers raise
 :class:`CommandError` for a condition the caller can act on; anything else
 reaching the dispatcher is a defect, gets its traceback logged, and is flagged

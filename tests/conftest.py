@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from qgis_mcp.client import QgisMCPClient
 
 # ---------------------------------------------------------------------------
-# City fixtures — reusable across test modules
+# City fixtures - reusable across test modules
 # ---------------------------------------------------------------------------
 
 CITIES = [
