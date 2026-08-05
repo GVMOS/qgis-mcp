@@ -28,6 +28,7 @@ from qgis.core import (
     QgsProcessingParameterNumber,
     QgsRasterBandStats,
     QgsSingleBandGrayRenderer,
+    QgsUnitTypes,
     QgsVectorLayerExporter,
     QgsVectorSimplifyMethod,
     QgsWkbTypes,
@@ -110,6 +111,14 @@ ALIGN_CENTER = _enum((Qt, "AlignmentFlag.AlignCenter"), (Qt, "AlignCenter"))
 MSGBOX_QUESTION = _enum((QMessageBox, "Icon.Question"), (QMessageBox, "Question"))
 MSGBOX_ACCEPT_ROLE = _enum((QMessageBox, "ButtonRole.AcceptRole"), (QMessageBox, "AcceptRole"))
 MSGBOX_REJECT_ROLE = _enum((QMessageBox, "ButtonRole.RejectRole"), (QMessageBox, "RejectRole"))
+
+# ── Render units (layout text sizing) ────────────────────────────────
+# Qgis.RenderUnit arrived in 3.30; QgsUnitTypes.RenderPoints covers 3.28.
+RENDER_UNIT_POINTS = _enum(
+    (Qgis, "RenderUnit.Points"),
+    (QgsUnitTypes, "RenderUnit.RenderPoints"),
+    (QgsUnitTypes, "RenderPoints"),
+)
 
 # ── Vector simplification hints ─────────────────────────────────────
 SIMPLIFY_GEOMETRY = _enum(

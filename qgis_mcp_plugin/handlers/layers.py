@@ -277,7 +277,7 @@ class LayerHandlers:
 
         Listed layers are rearranged into the given order within their common
         parent; unlisted siblings keep their slots. Deliberately does NOT use
-        QGIS's custom draw order — that freezes a snapshot list, so any layer
+        QGIS's custom draw order - that freezes a snapshot list, so any layer
         added afterwards would silently draw behind everything; any existing
         custom order is cleared for the same reason.
         """
@@ -393,7 +393,7 @@ class LayerHandlers:
         extent = layer.extent()
         # A layer with no features has a null extent whose bounds are NaN;
         # report it explicitly instead of leaking NaN to the client. Test the
-        # bounds themselves — QgsRectangle.isEmpty() is also true for the
+        # bounds themselves - QgsRectangle.isEmpty() is also true for the
         # zero-area extent of a single-point layer, which is a real extent.
         bounds = (extent.xMinimum(), extent.yMinimum(), extent.xMaximum(), extent.yMaximum())
         if extent.isNull() or not all(math.isfinite(b) for b in bounds):
@@ -493,7 +493,9 @@ class LayerHandlers:
             "authid": crs.authid(),
             "description": crs.description(),
             "is_geographic": crs.isGeographic(),
-            "proj4": crs.toProj4(),
+            # toProj4() is deprecated in QGIS 4 (toProj() since 3.10); keep the
+            # key name, which is what callers read.
+            "proj4": crs.toProj() if hasattr(crs, "toProj") else crs.toProj4(),
         }
 
     @command
@@ -517,7 +519,7 @@ class LayerHandlers:
 
     # How a service takes a CRS in its provider uri. A service missing from this
     # table has no say in it: XYZ is a Web Mercator tile scheme and the wms
-    # provider ignores `crs=` for `type=xyz` (verified on QGIS 4.0 — the layer
+    # provider ignores `crs=` for `type=xyz` (verified on QGIS 4.0 - the layer
     # comes back EPSG:3857 whatever you ask for), which is exactly why this
     # parameter used to be accepted and then silently dropped.
     _WEB_CRS_URI: ClassVar[dict] = {
@@ -554,7 +556,7 @@ class LayerHandlers:
 
         *crs* defaults to unset, and only a CRS the caller actually asks for is
         written into the uri. Injecting one by default would override whatever a
-        WMS serves natively — which is why the old ``EPSG:3857`` default could
+        WMS serves natively - which is why the old ``EPSG:3857`` default could
         not have been applied even in principle.
         """
         service = service.lower()

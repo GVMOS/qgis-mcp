@@ -13,7 +13,7 @@ from qgis.core import (
 )
 from qgis.PyQt.QtGui import QColor
 
-from ..compat import LAYOUT_SUCCESS
+from ..compat import LAYOUT_SUCCESS, RENDER_UNIT_POINTS
 from ..errors import CommandError
 from ..registry import command
 
@@ -139,6 +139,30 @@ class LayoutHandlers:
             "page_count": layout.pageCollection().pageCount(),
         }
 
+    @staticmethod
+    def _style_label(label, color, font_size):
+        """Set a layout label's colour and size through the current API.
+
+        QGIS 4 deprecates setFontColor()/font()/setFont() on QgsLayoutItemLabel
+        in favour of a QgsTextFormat, and each call logs a DeprecationWarning
+        with a traceback into the user's QGIS log. setTextFormat() arrived in
+        3.24, below the plugin's 3.28 minimum, but the old path is kept as a
+        fallback rather than assuming: a missing method here would take out
+        every layout label.
+        """
+        text_format = getattr(label, "textFormat", None)
+        if text_format is not None and hasattr(label, "setTextFormat"):
+            fmt = text_format()
+            fmt.setColor(QColor(color))
+            fmt.setSize(float(font_size))
+            fmt.setSizeUnit(RENDER_UNIT_POINTS)
+            label.setTextFormat(fmt)
+            return
+        label.setFontColor(QColor(color))
+        font = label.font()
+        font.setPointSize(int(font_size))
+        label.setFont(font)
+
     @command
     def add_layout_label(
         self,
@@ -158,10 +182,7 @@ class LayoutHandlers:
         layout = self._get_layout(layout_name)
         label = QgsLayoutItemLabel(layout)
         label.setText(text)
-        label.setFontColor(QColor(color))
-        font = label.font()
-        font.setPointSize(int(font_size))
-        label.setFont(font)
+        self._style_label(label, color, font_size)
         layout.addLayoutItem(label)
         label.attemptMove(QgsLayoutPoint(x, y))
         label.attemptResize(QgsLayoutSize(width, height))
