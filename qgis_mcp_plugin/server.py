@@ -9,6 +9,7 @@ thread touches the PyQGIS API, which is not thread-safe.
 """
 
 import contextlib
+import inspect
 import json
 import math
 import os
@@ -22,7 +23,7 @@ from qgis.core import QgsApplication, QgsMessageLog
 from qgis.PyQt.QtCore import QObject, QTimer
 
 from .compat import MSG_CRITICAL, MSG_INFO, MSG_WARNING
-from .constants import ADDR_IN_USE, DEFAULT_HOST, DEFAULT_PORT
+from .constants import ADDR_IN_USE, DEFAULT_HOST, DEFAULT_PORT, MAX_VERSION_LENGTH
 from .errors import CommandError
 from .handlers import (
     CanvasHandlers,
@@ -87,12 +88,29 @@ class QgisMCPServer(
 
     MAX_CLIENTS: ClassVar[int] = 10
 
-    def __init__(self, host=DEFAULT_HOST, port=DEFAULT_PORT, iface=None, on_clients_changed=None):
+    # A client that keeps announcing new version strings must not grow this set
+    # without bound, nor produce a warning per string.
+    MAX_TRACKED_VERSIONS: ClassVar[int] = 10
+
+    def __init__(
+        self,
+        host=DEFAULT_HOST,
+        port=DEFAULT_PORT,
+        iface=None,
+        on_clients_changed=None,
+        on_client_version=None,
+    ):
         super().__init__()
         self.host = host
         self.port = port
         self.iface = iface
         self.on_clients_changed = on_clients_changed
+        self.on_client_version = on_client_version
+        # Versions announced by connected MCP servers this session. The plugin
+        # compares them against its own to warn about a drifted install, and
+        # `diagnose` reports them so the mismatch is visible from the client too.
+        self.client_versions = set()
+        self._signatures = {}  # cmd_type -> inspect.Signature, filled on first use
         self.running = False
         self.socket = None
         self.clients: dict[socket.socket, bytes] = {}
@@ -115,6 +133,24 @@ class QgisMCPServer(
         if self.on_clients_changed:
             with contextlib.suppress(Exception):
                 self.on_clients_changed(len(self.clients))
+
+    def _record_client_version(self, raw):
+        """Note the version an MCP server announced, and report it once.
+
+        Only ever called on an authenticated command: an unauthenticated peer
+        must not be able to put strings in front of the user or grow this set.
+        """
+        if not isinstance(raw, str):
+            return
+        version = raw.strip()[:MAX_VERSION_LENGTH]
+        if not version or version in self.client_versions:
+            return
+        if len(self.client_versions) >= self.MAX_TRACKED_VERSIONS:
+            return
+        self.client_versions.add(version)
+        if self.on_client_version:
+            with contextlib.suppress(Exception):
+                self.on_client_version(version)
 
     _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", ""})
 
@@ -146,7 +182,7 @@ class QgisMCPServer(
         # it lets a second socket bind a port another socket already holds, so two
         # QGIS windows on one user profile (which share the saved port in
         # QgsSettings) would BOTH report "server started" on 9876 and one of them
-        # would silently swallow every connection — the wrong window answering with
+        # would silently swallow every connection - the wrong window answering with
         # no error anywhere. SO_EXCLUSIVEADDRUSE is the Windows way to ask for what
         # SO_REUSEADDR already gives us on Unix, and it still allows an immediate
         # rebind after stop, which is why SO_REUSEADDR was here to begin with.
@@ -185,7 +221,7 @@ class QgisMCPServer(
             self.start_error = str(e)
             if isinstance(e, OSError) and e.errno in ADDR_IN_USE:
                 self.start_error = (
-                    f"Port {self.port} is already in use — another QGIS window or program "
+                    f"Port {self.port} is already in use - another QGIS window or program "
                     "is on it. Pick a different port for this window."
                 )
             QgsMessageLog.logMessage(f"Failed to start server: {e!s}", self.LOG_TAG, MSG_CRITICAL)
@@ -242,7 +278,7 @@ class QgisMCPServer(
         buf = self.outbound.setdefault(client_sock, OutboundBuffer())
         buf.append(frame(resp_bytes))
         if buf.flush(client_sock):
-            # Fully written — drop the entry so the common case leaves nothing
+            # Fully written - drop the entry so the common case leaves nothing
             # for _flush_outbound to walk on every tick.
             self.outbound.pop(client_sock, None)
 
@@ -351,7 +387,7 @@ class QgisMCPServer(
         (open) for backward compatibility. Dispatch itself lives in _dispatch
         so internal callers (e.g. batch) reuse it without re-authenticating.
         """
-        # This runs on untrusted socket input before auth — never trust shape.
+        # This runs on untrusted socket input before auth - never trust shape.
         if not isinstance(command, dict):
             return {"status": "error", "message": "Invalid command: expected an object"}
 
@@ -369,7 +405,23 @@ class QgisMCPServer(
                     "status": "error",
                     "message": "Authentication failed: missing or invalid token",
                 }
+
+        # Authenticated from here on, so the announced version can be trusted
+        # enough to show the user. Absent on MCP servers older than 0.10.
+        self._record_client_version(command.get("client_version"))
         return self._dispatch(command)
+
+    def _signature(self, cmd_type, handler):
+        """Cached signature of a handler, for validating a caller's parameters.
+
+        Cached because `batch` can dispatch many commands in one message and
+        inspect.signature() is not free.
+        """
+        signature = self._signatures.get(cmd_type)
+        if signature is None:
+            signature = inspect.signature(handler)
+            self._signatures[cmd_type] = signature
+        return signature
 
     def _dispatch(self, command):
         """Dispatch an already-authenticated command to its handler."""
@@ -388,11 +440,23 @@ class QgisMCPServer(
                 return {"status": "error", "message": "Invalid params: expected an object"}
             handler = getattr(self, cmd_type)
 
+            # Wrong parameters are the caller's mistake, not a plugin defect, so
+            # check them against the signature before calling. Without this the
+            # TypeError raised by the call itself lands in the generic handler
+            # below and dumps a CRITICAL traceback in the user's QGIS log for
+            # what is really just a missing argument.
+            try:
+                self._signature(cmd_type, handler).bind(**params)
+            except TypeError as exc:
+                message = f"{cmd_type}: {exc}"
+                QgsMessageLog.logMessage(f"Bad parameters: {message}", self.LOG_TAG, MSG_WARNING)
+                return {"status": "error", "message": message}
+
             try:
                 QgsMessageLog.logMessage(f"Executing: {cmd_type}", self.LOG_TAG, MSG_INFO)
                 return {"status": "success", "result": handler(**params)}
             except CommandError as e:
-                # Expected failure the caller can act on — message only, no
+                # Expected failure the caller can act on - message only, no
                 # traceback: it would bury real defects in log noise.
                 QgsMessageLog.logMessage(f"Error in {cmd_type}: {e!s}", self.LOG_TAG, MSG_WARNING)
                 return {"status": "error", "message": str(e)}
@@ -423,7 +487,7 @@ class QgisMCPServer(
         Destructive commands are refused here, not only in the MCP server: the
         socket is reachable by any local process, so a guard that lives solely
         on the client side is advisory. Rejecting one command does not abort the
-        batch — the refusal is reported in that command's slot.
+        batch - the refusal is reported in that command's slot.
         """
         results = []
         for cmd in commands:
@@ -436,7 +500,7 @@ class QgisMCPServer(
                     {
                         "status": "error",
                         "message": (
-                            f"Command {cmd_type!r} is not allowed in batch — "
+                            f"Command {cmd_type!r} is not allowed in batch - "
                             "call it individually so confirmation can be requested"
                         ),
                     }

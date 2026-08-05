@@ -19,13 +19,14 @@ from qgis_mcp.protocol import (
     TIMEOUT_DEFAULT,
     TIMEOUT_LONG,
     get_auth_token,
+    get_client_version,
 )
 
 logger = logging.getLogger("QgisMCPClient")
 
 # Cap the TCP handshake. Without it connect() inherits the OS default, so a host
 # that routes but has nothing listening (easy to configure now that instances
-# carry their own host) stalls ~21s per attempt — times the retry schedule, that
+# carry their own host) stalls ~21s per attempt - times the retry schedule, that
 # is minutes for one tool call. A local refusal is immediate either way.
 _CONNECT_TIMEOUT = 3.0
 
@@ -103,7 +104,15 @@ class QgisMCPClient:
         if not self.socket:
             raise ConnectionError("Not connected to server")
 
-        command = {"type": command_type, "params": params or {}}
+        # The plugin reads `client_version` to tell the user when the two halves
+        # have drifted apart - a real risk, since the uvx cache pins the server
+        # while QGIS keeps upgrading the plugin. An older plugin ignores the
+        # extra key, so this is safe in both directions.
+        command = {
+            "type": command_type,
+            "params": params or {},
+            "client_version": get_client_version(),
+        }
 
         # Attach the shared-secret token when QGIS_MCP_TOKEN is configured. No-op
         # when auth is disabled, so existing setups are unaffected.
@@ -138,7 +147,7 @@ class QgisMCPClient:
             self.disconnect()
             raise ConnectionError(f"Socket operation timed out after {timeout}s") from err
         except ValueError as err:
-            # Protocol framing error (e.g. "Response too large") — the socket
+            # Protocol framing error (e.g. "Response too large") - the socket
             # buffer is now out of sync, so close it and let callers reconnect.
             self.disconnect()
             raise ConnectionError("Protocol framing error, connection reset") from err
@@ -148,7 +157,7 @@ class QgisMCPClient:
         except Exception as e:
             # Any other exception during framed I/O (e.g. _recv_exact's
             # "Response too large" guard, json errors, struct errors) leaves
-            # the socket in an unknown state — close it so we don't reuse a
+            # the socket in an unknown state - close it so we don't reuse a
             # desynced stream on the next call.
             logger.exception("Error sending command")
             self.disconnect()

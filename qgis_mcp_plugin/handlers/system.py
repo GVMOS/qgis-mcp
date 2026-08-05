@@ -28,7 +28,7 @@ from qgis.core import (
 from qgis.utils import active_plugins, available_plugins, pluginMetadata, reloadPlugin
 
 from ..compat import MSG_INFO
-from ..constants import PLUGIN_DIR
+from ..constants import plugin_version
 from ..errors import CommandError
 from ..registry import command
 
@@ -62,13 +62,7 @@ class SystemHandlers:
 
         # 2. Plugin version
         try:
-            import configparser
-
-            metadata_path = os.path.join(PLUGIN_DIR, "metadata.txt")
-            config = configparser.ConfigParser()
-            config.read(metadata_path)
-            plugin_version = config.get("general", "version", fallback="unknown")
-            checks.append({"name": "plugin_version", "status": "ok", "detail": plugin_version})
+            checks.append({"name": "plugin_version", "status": "ok", "detail": plugin_version()})
         except Exception as e:
             checks.append({"name": "plugin_version", "status": "error", "detail": str(e)})
             overall = "degraded" if overall == "healthy" else overall
@@ -76,6 +70,20 @@ class SystemHandlers:
         # 3. Connected clients
         client_count = len(self.clients)
         checks.append({"name": "connected_clients", "status": "ok", "detail": client_count})
+
+        # 3b. Which MCP server versions have talked to this plugin. The client
+        # adds its own comparison (version_match), but reporting it from the
+        # plugin's side covers several clients on one QGIS, where only some are
+        # out of date - and it is empty against a server older than 0.10.
+        seen = sorted(self.client_versions)
+        drifted = [v for v in seen if v != plugin_version()]
+        checks.append(
+            {
+                "name": "client_versions",
+                "status": "mismatch" if drifted else "ok",
+                "detail": {"seen": seen, "plugin": plugin_version(), "drifted": drifted},
+            }
+        )
 
         # 4. Processing providers
         try:
@@ -145,7 +153,7 @@ class SystemHandlers:
                 "QgsCoordinateReferenceSystem": QgsCoordinateReferenceSystem,
             }
 
-            exec(code, namespace)  # nosec B102 — intentional: MCP execute_code tool
+            exec(code, namespace)  # nosec B102 - intentional: MCP execute_code tool
 
             return {
                 "executed": True,

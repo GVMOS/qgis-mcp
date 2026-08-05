@@ -26,7 +26,7 @@ from qgis.PyQt.QtWidgets import (
 )
 
 from .compat import MSG_CRITICAL, MSG_INFO
-from .constants import SETTINGS_PREFIX
+from .constants import SETTINGS_PREFIX, plugin_version
 
 
 def _client_config_registry(repo_dir):
@@ -101,7 +101,7 @@ def _qgis_entry_has_refresh(entry):
     """True when a remote uvx 'qgis' entry has --refresh-package (fails offline)."""
     command, args = _qgis_entry_command_args(entry)
     if command != "uvx" or "qgis-mcp-server" not in args:
-        return False  # local mode / unknown — leave alone
+        return False  # local mode / unknown - leave alone
     return "--refresh-package" in args
 
 
@@ -123,10 +123,14 @@ def _remove_refresh_from_entry(entry):
 
 
 class MCPConfiguratorDialog(QDialog):
-    def __init__(self, iface, parent=None):
+    def __init__(self, iface, parent=None, server=None):
         super().__init__(parent)
         self.iface = iface
-        self.setWindowTitle("QGIS MCP — Setup & Configurator")
+        # The running QgisMCPServer, when there is one: it knows which MCP server
+        # versions have actually connected, which is the only way this dialog can
+        # report drift between the two halves.
+        self.server = server
+        self.setWindowTitle("QGIS MCP - Setup & Configurator")
         self.setMinimumSize(600, 500)
 
         self.repo_dir = Path(__file__).resolve().parent.parent
@@ -207,9 +211,9 @@ class MCPConfiguratorDialog(QDialog):
         self.client_combo.currentTextChanged.connect(self._on_client_changed)
         client_row.addWidget(self.client_combo)
 
-        # Mode selector — only relevant for dev installs with a local clone
+        # Mode selector - only relevant for dev installs with a local clone
         self.mode_combo = QComboBox()
-        self.mode_combo.addItems(["Remote (uvx — recommended)", "Local (uv run)"])
+        self.mode_combo.addItems(["Remote (uvx - recommended)", "Local (uv run)"])
         self.mode_combo.setToolTip(
             "Remote: install MCP server on-the-fly via uvx (no clone needed).\n"
             "Local: run MCP server from your git clone via uv."
@@ -220,13 +224,13 @@ class MCPConfiguratorDialog(QDialog):
         client_row.addStretch()
         client_form.addLayout(client_row)
 
-        # Refresh toggle — adds `--refresh-package qgis-mcp` so uvx re-pulls the
+        # Refresh toggle - adds `--refresh-package qgis-mcp` so uvx re-pulls the
         # latest server from GitHub on every launch (remote mode only).
         self.refresh_check = QCheckBox("Always pull latest server from GitHub")
         self.refresh_check.setToolTip(
             "Add --refresh-package qgis-mcp so uvx re-pulls the latest server from\n"
             "GitHub on every client launch (stays in sync with the plugin).\n"
-            "Warning: requires network at launch — the server fails to start offline.\n"
+            "Warning: requires network at launch - the server fails to start offline.\n"
             "Leave unchecked to use the cached version (works offline, manual updates)."
         )
         self.refresh_check.setChecked(False)
@@ -271,6 +275,13 @@ class MCPConfiguratorDialog(QDialog):
 
         self.status_label = QLabel()
         preview_box.addWidget(self.status_label)
+
+        # Plugin vs MCP server version. The two are installed and updated by
+        # different mechanisms (Plugin Manager vs the uvx cache), so drift is
+        # normal and invisible unless it is stated somewhere the user looks.
+        self.version_label = QLabel()
+        self.version_label.setWordWrap(True)
+        preview_box.addWidget(self.version_label)
         layout.addWidget(preview_group)
 
         layout.addStretch()
@@ -408,11 +419,11 @@ class MCPConfiguratorDialog(QDialog):
         yaml_block = f'mcpServers:\n  qgis:\n    command: "{bat_escaped}"\n    args: []'
 
         return (
-            f"Step 1 — Create this file:\n"
+            f"Step 1 - Create this file:\n"
             f"  {bat_path}\n\n"
             f"Contents:\n"
             f"{bat_content}\n\n"
-            f"Step 2 — Add to:\n"
+            f"Step 2 - Add to:\n"
             f"  {cfg_path}\n\n"
             f"{yaml_block}\n\n"
             f"See docs/agent-integration.md for full details."
@@ -428,7 +439,7 @@ class MCPConfiguratorDialog(QDialog):
 
         if info.get("entry_format") == "hermes":
             self.preview_label.setText(
-                "Manual setup required — copy the .bat content and YAML config below:"
+                "Manual setup required - copy the .bat content and YAML config below:"
             )
             self.preview_edit.setPlainText(self._hermes_preview_text(remote))
             return
@@ -451,7 +462,36 @@ class MCPConfiguratorDialog(QDialog):
         entry = self._get_server_entry(client, remote, refresh)
         self.preview_edit.setPlainText(json.dumps({"qgis": entry}, indent=2))
 
+    def _refresh_versions(self):
+        """Show this plugin's version against the MCP servers that connected.
+
+        Set before every early return in refresh_status(): it does not depend on
+        which client is selected, and it is the one place a user can see drift
+        without asking an agent to run 'diagnose'.
+        """
+        mine = plugin_version()
+        seen = sorted(getattr(self.server, "client_versions", ()) or ())
+        if not seen:
+            self.version_label.setText(
+                f"Plugin {mine} · MCP server: none connected yet "
+                "(start the server and run a tool once)"
+            )
+            self.version_label.setStyleSheet("color: gray;")
+            return
+        drifted = [v for v in seen if v != mine]
+        if drifted:
+            self.version_label.setText(
+                f"Plugin {mine} · MCP server {', '.join(seen)} - versions differ. This works; "
+                "tools added since the older half was built will be missing, so matching them "
+                "is recommended: run 'uv cache clean qgis-mcp', then restart your MCP client."
+            )
+            self.version_label.setStyleSheet("color: orange;")
+        else:
+            self.version_label.setText(f"Plugin {mine} · MCP server {', '.join(seen)} - matching")
+            self.version_label.setStyleSheet("color: green;")
+
     def refresh_status(self):
+        self._refresh_versions()
         client = self.client_combo.currentText()
         info = self._get_client_info(client)
 
@@ -459,7 +499,7 @@ class MCPConfiguratorDialog(QDialog):
             hermes_cfg = info.get("hermes_cfg")
             if hermes_cfg and hermes_cfg.exists():
                 self.status_label.setText(
-                    f"Status: config.yaml found — verify 'qgis' is in mcpServers ({hermes_cfg})"
+                    f"Status: config.yaml found - verify 'qgis' is in mcpServers ({hermes_cfg})"
                 )
                 self.status_label.setStyleSheet("color: orange;")
             else:

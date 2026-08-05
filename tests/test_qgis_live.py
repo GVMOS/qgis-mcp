@@ -790,7 +790,7 @@ def test_execute_sql_ignores_non_vector_layers(client, setup_test_data):
 
 
 def test_layer_extent_empty_layer_is_json_safe(client):
-    """An empty layer has a NaN extent — it must serialise as null, not NaN."""
+    """An empty layer has a NaN extent - it must serialise as null, not NaN."""
     resp = client.send_command(
         "create_memory_layer",
         {"name": f"empty_{uuid.uuid4().hex[:8]}", "geometry_type": "Point", "crs": "EPSG:4326"},
@@ -1066,3 +1066,88 @@ def test_add_web_layer_crs_is_applied_or_refused(client):
     finally:
         for layer_id in layer_ids:
             client.send_command("remove_layer", {"layer_id": layer_id})
+
+
+def test_plugin_records_the_client_version_it_is_told(client):
+    """diagnose reports the MCP server versions that have connected.
+
+    The plugin half and the server half are installed by different mechanisms
+    (QGIS Plugin Manager vs the uvx cache), so this is what makes drift visible
+    from inside QGIS rather than only in the client's own version_match check.
+    """
+    from qgis_mcp.protocol import get_client_version
+
+    client.send_command("ping")  # every command announces the version
+    resp = client.send_command("diagnose")
+    assert resp["status"] == "success", resp.get("message")
+
+    check = next(c for c in resp["result"]["checks"] if c["name"] == "client_versions")
+    assert get_client_version() in check["detail"]["seen"], check
+    assert check["detail"]["plugin"], check
+    # Status follows whether anything seen differs from the plugin's own version.
+    drifted = check["detail"]["drifted"]
+    assert check["status"] == ("mismatch" if drifted else "ok")
+    assert all(v != check["detail"]["plugin"] for v in drifted)
+
+
+def test_client_version_is_untrusted_input(client):
+    """It arrives over a socket and ends up in a message bar, so it is bounded."""
+    import json
+    import socket
+    import struct
+
+    from qgis_mcp.protocol import HEADER_STRUCT
+
+    def raw_command(envelope):
+        sock = socket.create_connection(("localhost", 9876), timeout=10)
+        try:
+            payload = json.dumps(envelope).encode()
+            sock.sendall(HEADER_STRUCT.pack(len(payload)) + payload)
+            head = b""
+            while len(head) < 4:
+                head += sock.recv(4 - len(head))
+            size = struct.unpack(">I", head)[0]
+            body = b""
+            while len(body) < size:
+                body += sock.recv(size - len(body))
+            return json.loads(body)
+        finally:
+            sock.close()
+
+    for bogus in ("v" * 500, 12345, None, ["not", "a", "string"], {"nested": 1}, "  "):
+        resp = raw_command({"type": "ping", "params": {}, "client_version": bogus})
+        assert resp["status"] == "success", (bogus, resp)
+
+    seen = next(
+        c
+        for c in client.send_command("diagnose")["result"]["checks"]
+        if c["name"] == "client_versions"
+    )["detail"]["seen"]
+    assert all(len(v) <= 32 for v in seen), seen
+    assert not any(v.strip() == "" for v in seen), seen
+
+    # The over-long string is recorded (truncated), which by design pushes a
+    # version-drift notice into the QGIS message bar. Clear it: a test must not
+    # leave "MCP server vvvvvvvv..." sitting in front of whoever is using QGIS.
+    client.send_command(
+        "execute_code",
+        {"code": "iface.messageBar().clearWidgets()\nresult = 'cleared'"},
+    )
+
+
+def test_bad_parameters_are_not_reported_as_plugin_defects(client):
+    """A missing or unknown argument is the caller's mistake, not a bug.
+
+    Both come back as an ordinary error: no "internal" flag, and no CRITICAL
+    traceback in the QGIS log, which is what a real defect is reserved for.
+    """
+    missing = client.send_command("add_vector_layer", {})
+    assert missing["status"] == "error"
+    assert not missing.get("internal"), missing
+    assert "add_vector_layer" in missing["message"]
+    assert "path" in missing["message"], missing["message"]
+
+    wrong_type = client.send_command("get_layers", {"limit": "not-an-int"})
+    assert wrong_type["status"] == "error"
+    # This one really does fail inside the handler, so it stays a flagged defect.
+    assert wrong_type.get("internal") is True, wrong_type

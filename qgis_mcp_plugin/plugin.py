@@ -45,7 +45,7 @@ from .configurator import (
     _qgis_entry_has_refresh,
     _remove_refresh_from_entry,
 )
-from .constants import DEFAULT_PORT, SETTINGS_PREFIX
+from .constants import DEFAULT_PORT, SETTINGS_PREFIX, plugin_version
 from .server import QgisMCPServer
 
 
@@ -224,7 +224,7 @@ class QgisMCPPlugin:
             return self._green_logo_icon()
         pixmap = self._green_logo_icon().pixmap(QSize(64, 64))
         size = pixmap.width()
-        d = int(size * 0.45)  # badge diameter — large enough to survive toolbar downscale
+        d = int(size * 0.45)  # badge diameter - large enough to survive toolbar downscale
         x = 0
         y = size - d  # bottom-left corner
         painter = QPainter(pixmap)
@@ -251,12 +251,36 @@ class QgisMCPPlugin:
         self.action.setIcon(self._badge_icon(count))
         plural = "client" if count == 1 else "clients"
         self.action.setToolTip(
-            f"MCP server running on :{port} — {count} {plural} connected — click to stop"
+            f"MCP server running on :{port} - {count} {plural} connected - click to stop"
         )
+
+    def _on_client_version(self, version):
+        """Note once when a connected MCP server is not this plugin's version.
+
+        The two halves drift by default rather than by accident: QGIS upgrades
+        the plugin through the Plugin Manager, while uvx keeps serving whatever
+        it cached for the configured archive URL. Nobody finds out otherwise.
+
+        Deliberately informational, not a warning: mismatched halves keep working
+        - only tools added since the older half was built are missing. Crying
+        wolf here would teach the user to dismiss the bar. The exact update
+        command depends on how the MCP server was launched, which only that side
+        knows, so point at the configurator instead of guessing.
+        """
+        mine = plugin_version()
+        if version == mine:
+            return
+        with contextlib.suppress(Exception):
+            self.iface.messageBar().pushInfo(
+                "QGIS MCP",
+                f"MCP server {version} · plugin {mine}. It works, but newer tools may be "
+                "missing - matching them is recommended. See Plugins ▸ QGIS MCP ▸ MCP Setup "
+                "& Configurator, or ask your agent to run 'diagnose' for the exact command.",
+            )
 
     def _show_help(self):
         """Show the MCP Setup & Configurator dialog."""
-        dlg = MCPConfiguratorDialog(self.iface, self.iface.mainWindow())
+        dlg = MCPConfiguratorDialog(self.iface, self.iface.mainWindow(), server=self.server)
         dlg.exec()
         # Reflect an auto-start change made in the dialog onto the toolbar checkbox.
         if hasattr(self, "autostart_cb"):
@@ -295,14 +319,14 @@ class QgisMCPPlugin:
                 affected.append((client, path, info["key"], data))
 
         if not affected:
-            return  # nothing to migrate — stay silent
+            return  # nothing to migrate - stay silent
 
         # Prompt once, regardless of choice.
         settings.setValue(f"{SETTINGS_PREFIX}/refresh_removal_prompted", True)
 
         clients = ", ".join(sorted({c for c, *_ in affected}))
         box = QMessageBox(self.iface.mainWindow())
-        box.setWindowTitle("QGIS MCP — fix offline startup?")
+        box.setWindowTitle("QGIS MCP - fix offline startup?")
         box.setIcon(MSGBOX_QUESTION)
         box.setText(
             f"Your MCP config for {clients} uses '--refresh-package', which "
@@ -341,12 +365,15 @@ class QgisMCPPlugin:
         if checked:
             port = self.port_spin.value()
             self.server = QgisMCPServer(
-                port=port, iface=self.iface, on_clients_changed=self._on_clients_changed
+                port=port,
+                iface=self.iface,
+                on_clients_changed=self._on_clients_changed,
+                on_client_version=self._on_client_version,
             )
             if self.server.start():
                 self.action.setIcon(self._green_logo_icon())
                 self.action.setText(f"MCP :{port}")
-                self.action.setToolTip(f"MCP server running on :{port} — click to stop")
+                self.action.setToolTip(f"MCP server running on :{port} - click to stop")
                 self.port_spin.setEnabled(False)
             else:
                 # Without this the button just pops back out and the only trace is a
