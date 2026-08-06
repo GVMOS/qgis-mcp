@@ -63,6 +63,7 @@ uv run --no-sync pytest tests/ -v
 | `QGIS_MCP_LOG_FILE` | `~/.local/share/qgis-mcp/server.log` | Log file path (empty to disable file logging) |
 | `QGIS_MCP_LOG_LEVEL` | `INFO` | File log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 | `QGIS_MCP_TOOL_MODE` | `granular` | Tool registration mode: `granular` (118 tools) or `compound` (27 grouped tools) |
+| `QGIS_MCP_AUTO_CONFIRM` | _(unset; `1` in configs written by `install.py`)_ | `1`/`true`/`yes`/`on` skips `_confirm_destructive`'s elicitation. The clients `install.py` configures gate destructive tool calls themselves, so the elicitation is a second prompt for the same call - `SERVER_ENV` in `install.py` puts it in every generated entry. |
 
 ## MCP Tools, Resources, Prompts, Protocol Features
 

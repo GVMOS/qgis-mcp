@@ -61,6 +61,10 @@ Or, if you have a local clone of this repository:
 }
 ```
 
+`install.py` adds `"env": {"QGIS_MCP_AUTO_CONFIRM": "1"}` to the block it writes: the clients
+it configures already ask before running a destructive tool, so the server's own confirmation
+prompt would be a second dialog for the same call. Drop that entry to get it back.
+
 ### With optional environment variables
 
 ```json

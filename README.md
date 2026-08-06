@@ -367,7 +367,7 @@ Groups: `system`, `project`, `layer`, `features`, `selection`, `style`, `canvas`
 | `QGIS_MCP_LOG_FILE` | `~/.local/share/qgis-mcp/server.log` | Log file path (empty to disable) |
 | `QGIS_MCP_LOG_LEVEL` | `INFO` | File log level |
 | `QGIS_MCP_TOOL_MODE` | `granular` | `granular` (118 tools) or `compound` (27 grouped) |
-| `QGIS_MCP_AUTO_CONFIRM` | _(unset)_ | `1`/`true`/`yes`/`on` skips the confirmation elicitation on destructive tools (remove_layer, delete_features, execute_code, ...). Use only with a client whose own tool-call gate already covers them - the elicitation is then a redundant second prompt. |
+| `QGIS_MCP_AUTO_CONFIRM` | `1` from `install.py` | `1`/`true`/`yes`/`on` skips the confirmation elicitation on destructive tools (remove_layer, delete_features, execute_code, ...). `install.py` writes it into the config it generates, since those clients already confirm destructive tool calls themselves and the elicitation is then a second prompt for the same call. Remove it from your client config to get the elicitation back. |
 
 ### Authentication
 
