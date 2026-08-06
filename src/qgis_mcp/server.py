@@ -462,7 +462,14 @@ async def _confirm_destructive(ctx: Context, message: str) -> bool:
     Returns True if client doesn't support elicitation (fail-open), since
     the tool is already marked destructive via ToolAnnotations and the client
     can gate execution at the tool-call level.
+
+    ``QGIS_MCP_AUTO_CONFIRM`` (1/true/yes/on) skips the elicitation entirely,
+    for clients whose own tool-call gate makes this prompt a redundant second
+    confirmation. Read per call so a long-lived server honors changes.
     """
+    if os.environ.get("QGIS_MCP_AUTO_CONFIRM", "").strip().lower() in {"1", "true", "yes", "on"}:
+        logger.info("QGIS_MCP_AUTO_CONFIRM set - skipping confirmation elicitation")
+        return True
     try:
         response = await ctx.elicit(message=message, schema=_ConfirmSchema)
     except McpError:

@@ -1112,6 +1112,33 @@ async def test_remove_layer_confirmed_by_user(mock_connection):
     assert output == {"ok": True}
 
 
+@pytest.mark.asyncio
+async def test_auto_confirm_skips_elicitation(mock_connection):
+    """QGIS_MCP_AUTO_CONFIRM=1 proceeds without ever eliciting."""
+    mock_connection.send_command.return_value = {"status": "success", "result": {"ok": True}}
+    from qgis_mcp.server import remove_layer
+
+    ctx = _make_ctx(elicitation="decline")
+    with patch.dict(os.environ, {"QGIS_MCP_AUTO_CONFIRM": "1"}):
+        output = await remove_layer(ctx, layer_id="test_layer")
+    assert output == {"ok": True}
+    ctx.elicit.assert_not_called()
+    mock_connection.send_command.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_auto_confirm_falsy_value_still_elicits(mock_connection):
+    """QGIS_MCP_AUTO_CONFIRM=0 keeps the normal confirmation path."""
+    from qgis_mcp.server import remove_layer
+
+    ctx = _make_ctx(elicitation="decline")
+    with patch.dict(os.environ, {"QGIS_MCP_AUTO_CONFIRM": "0"}):
+        output = await remove_layer(ctx, layer_id="test_layer")
+    assert output == {"ok": False, "message": "Cancelled by user"}
+    ctx.elicit.assert_called_once()
+    mock_connection.send_command.assert_not_called()
+
+
 # --- Env var configuration tests ---
 
 
