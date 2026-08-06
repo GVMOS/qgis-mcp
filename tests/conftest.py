@@ -13,6 +13,18 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from qgis_mcp.client import QgisMCPClient
 
+
+@pytest.fixture(autouse=True)
+def elicit_confirmations(monkeypatch):
+    """Exercise the elicitation path, which is off by default in production.
+
+    `_confirm_destructive` only elicits when QGIS_MCP_AUTO_CONFIRM is falsy, so
+    without this every confirmation test would assert against a no-op. Tests for
+    the default (skip) delete the var themselves.
+    """
+    monkeypatch.setenv("QGIS_MCP_AUTO_CONFIRM", "0")
+
+
 # ---------------------------------------------------------------------------
 # City fixtures - reusable across test modules
 # ---------------------------------------------------------------------------

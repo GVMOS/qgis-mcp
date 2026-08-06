@@ -463,12 +463,19 @@ async def _confirm_destructive(ctx: Context, message: str) -> bool:
     the tool is already marked destructive via ToolAnnotations and the client
     can gate execution at the tool-call level.
 
-    ``QGIS_MCP_AUTO_CONFIRM`` (1/true/yes/on) skips the elicitation entirely,
-    for clients whose own tool-call gate makes this prompt a redundant second
-    confirmation. Read per call so a long-lived server honors changes.
+    Skipped by default: MCP clients gate destructive tool calls themselves
+    (helped by the destructiveHint annotation), so eliciting here is a second
+    prompt for the same call - and two prompts train click-through, which makes
+    the client's own prompt worse. Set ``QGIS_MCP_AUTO_CONFIRM=0`` (or false/no/
+    off) to elicit anyway, for a client that runs tools unattended. Read per
+    call so a long-lived server honors changes.
     """
-    if os.environ.get("QGIS_MCP_AUTO_CONFIRM", "").strip().lower() in {"1", "true", "yes", "on"}:
-        logger.info("QGIS_MCP_AUTO_CONFIRM set - skipping confirmation elicitation")
+    if os.environ.get("QGIS_MCP_AUTO_CONFIRM", "").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }:
         return True
     try:
         response = await ctx.elicit(message=message, schema=_ConfirmSchema)

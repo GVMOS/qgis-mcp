@@ -1113,26 +1113,42 @@ async def test_remove_layer_confirmed_by_user(mock_connection):
 
 
 @pytest.mark.asyncio
-async def test_auto_confirm_skips_elicitation(mock_connection):
-    """QGIS_MCP_AUTO_CONFIRM=1 proceeds without ever eliciting."""
+async def test_unset_auto_confirm_skips_elicitation(mock_connection):
+    """Default (var unset): proceed without ever eliciting."""
     mock_connection.send_command.return_value = {"status": "success", "result": {"ok": True}}
     from qgis_mcp.server import remove_layer
 
     ctx = _make_ctx(elicitation="decline")
-    with patch.dict(os.environ, {"QGIS_MCP_AUTO_CONFIRM": "1"}):
+    with patch.dict(os.environ, clear=False):
+        os.environ.pop("QGIS_MCP_AUTO_CONFIRM", None)
         output = await remove_layer(ctx, layer_id="test_layer")
     assert output == {"ok": True}
     ctx.elicit.assert_not_called()
     mock_connection.send_command.assert_called_once()
 
 
+@pytest.mark.parametrize("value", ["1", "true", "yes", "on", "", "banana"])
 @pytest.mark.asyncio
-async def test_auto_confirm_falsy_value_still_elicits(mock_connection):
-    """QGIS_MCP_AUTO_CONFIRM=0 keeps the normal confirmation path."""
+async def test_non_falsy_auto_confirm_skips_elicitation(mock_connection, value):
+    """Only 0/false/no/off re-enable the prompt - anything else skips it."""
+    mock_connection.send_command.return_value = {"status": "success", "result": {"ok": True}}
     from qgis_mcp.server import remove_layer
 
     ctx = _make_ctx(elicitation="decline")
-    with patch.dict(os.environ, {"QGIS_MCP_AUTO_CONFIRM": "0"}):
+    with patch.dict(os.environ, {"QGIS_MCP_AUTO_CONFIRM": value}):
+        output = await remove_layer(ctx, layer_id="test_layer")
+    assert output == {"ok": True}
+    ctx.elicit.assert_not_called()
+
+
+@pytest.mark.parametrize("value", ["0", "false", "NO", " off "])
+@pytest.mark.asyncio
+async def test_falsy_auto_confirm_elicits(mock_connection, value):
+    """QGIS_MCP_AUTO_CONFIRM=0/false/no/off restores the confirmation prompt."""
+    from qgis_mcp.server import remove_layer
+
+    ctx = _make_ctx(elicitation="decline")
+    with patch.dict(os.environ, {"QGIS_MCP_AUTO_CONFIRM": value}):
         output = await remove_layer(ctx, layer_id="test_layer")
     assert output == {"ok": False, "message": "Cancelled by user"}
     ctx.elicit.assert_called_once()

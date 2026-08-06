@@ -30,13 +30,6 @@ PLUGIN_SRC = REPO_DIR / "qgis_mcp_plugin"
 # not visible to GUI-spawned MCP servers (e.g. Claude Desktop on Windows).
 GITHUB_URL = "https://github.com/nkarasiak/qgis-mcp/archive/refs/heads/main.zip"
 
-# Every client we configure gates tool calls itself (allow once / always / deny),
-# so the server's own elicitation on destructive tools is a redundant second
-# prompt. Written into the generated config rather than defaulted in the server,
-# so it stays visible and a user can drop it. Remove the line to get the
-# server-side confirmation back.
-SERVER_ENV = {"QGIS_MCP_AUTO_CONFIRM": "1"}
-
 # ── Platform helpers ────────────────────────────────────────────────────────
 
 
@@ -200,13 +193,11 @@ def _local_entry() -> dict:
                 "--no-sync",
                 "src/qgis_mcp/server.py",
             ],
-            "env": dict(SERVER_ENV),
         }
     # Fallback: run directly from the venv Python
     return {
         "command": str(_venv_python()),
         "args": [str(REPO_DIR / "src" / "qgis_mcp" / "server.py")],
-        "env": dict(SERVER_ENV),
     }
 
 
@@ -214,7 +205,6 @@ def _remote_entry() -> dict:
     return {
         "command": "uvx",
         "args": ["--from", GITHUB_URL, "qgis-mcp-server"],
-        "env": dict(SERVER_ENV),
     }
 
 
@@ -242,8 +232,7 @@ def _opencode_server_entry(remote: bool) -> dict:
         ]
     else:
         cmd = [str(_venv_python()), str(REPO_DIR / "src" / "qgis_mcp" / "server.py")]
-    # opencode spells the env block "environment", not "env".
-    return {"type": "local", "command": cmd, "environment": dict(SERVER_ENV)}
+    return {"type": "local", "command": cmd}
 
 
 def _hermes_bat_content(remote: bool) -> str:
@@ -269,8 +258,7 @@ def _hermes_bat_content(remote: bool) -> str:
         "set VIRTUAL_ENV=\r\n"
         "set PYTHONPATH=\r\n"
         "set PYTHONHOME=\r\n"
-        + "".join(f"set {k}={v}\r\n" for k, v in SERVER_ENV.items())
-        + f"{launch_cmd}\r\n"
+        f"{launch_cmd}\r\n"
     )
 
 
@@ -441,15 +429,17 @@ def configure_client(client_name: str, remote: bool) -> None:
         else:
             add_args = [str(_venv_python()), str(REPO_DIR / "src" / "qgis_mcp" / "server.py")]
 
-        env_flags = [f"--env={k}={v}" for k, v in SERVER_ENV.items()]
-
         if cli_name == "claude":
             # Claude Code supports scoped installs; use user scope for QGIS (global tool)
             subprocess.run(
                 [cli_bin, "mcp", "remove", "-s", "user", "qgis"],
                 capture_output=True,
             )
-            base = [cli_bin, "mcp", "add", "-s", "user", "qgis"]
+            result = subprocess.run(
+                [cli_bin, "mcp", "add", "-s", "user", "qgis", "--", *add_args],
+                capture_output=True,
+                text=True,
+            )
             label = "Claude Code (user scope)"
         else:
             # Codex CLI: `codex mcp add <name> -- <cmd> [args...]`
@@ -457,19 +447,12 @@ def configure_client(client_name: str, remote: bool) -> None:
                 [cli_bin, "mcp", "remove", "qgis"],
                 capture_output=True,
             )
-            base = [cli_bin, "mcp", "add", "qgis"]
+            result = subprocess.run(
+                [cli_bin, "mcp", "add", "qgis", "--", *add_args],
+                capture_output=True,
+                text=True,
+            )
             label = "Codex CLI"
-
-        result = subprocess.run(
-            [*base, *env_flags, "--", *add_args], capture_output=True, text=True
-        )
-        if result.returncode != 0 and env_flags:
-            # Older CLI without an --env flag: configure without it rather than
-            # leaving the client unconfigured. Then the elicitation still shows.
-            retry = subprocess.run([*base, "--", *add_args], capture_output=True, text=True)
-            if retry.returncode == 0:
-                print(f"  {label}: no --env support, set QGIS_MCP_AUTO_CONFIRM=1 yourself")
-                result = retry
 
         if result.returncode == 0:
             print(f"  Configured {label}.")
