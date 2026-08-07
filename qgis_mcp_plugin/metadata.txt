@@ -31,10 +31,10 @@ category=Plugins
 icon=icons/icon.png
 experimental=False
 deprecated=False
-changelog=0.11.0 : Destructive tools no longer prompt twice - the server's own
-    confirmation is off by default, QGIS_MCP_AUTO_CONFIRM=0 brings it back.
-    Reported and first implemented by Gunther-Schulz (#36) - thank you.
-    0.10.0 : Plugin/MCP server version drift is now reported - a log line
-    per connected server, the update command in diagnose, a Copy fix button in
-    the configurator. Ticking auto-start also starts the server.
+changelog=0.11.0 : Destructive tools no longer prompt twice. The confirmation
+    from the server is off by default, QGIS_MCP_AUTO_CONFIRM=0 brings it back.
+    Reported and first implemented by Gunther-Schulz (#36). Thank you.
+    0.10.0 : Version drift between plugin and MCP server is now reported: a log
+    line per connected server, the update command in diagnose, a Copy fix
+    button in the configurator. Ticking auto start also starts the server.
     Earlier releases: https://github.com/nkarasiak/qgis-mcp/releases
