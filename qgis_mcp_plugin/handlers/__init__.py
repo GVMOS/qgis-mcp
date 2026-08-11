@@ -8,6 +8,7 @@ from .base import HandlerBase
 from .canvas import CanvasHandlers
 from .connections import ConnectionHandlers
 from .features import FeatureHandlers
+from .geoserver import GeoServerHandlers
 from .layers import LayerHandlers
 from .layout import LayoutHandlers
 from .processing import ProcessingHandlers
@@ -19,6 +20,7 @@ __all__ = [
     "CanvasHandlers",
     "ConnectionHandlers",
     "FeatureHandlers",
+    "GeoServerHandlers",
     "HandlerBase",
     "LayerHandlers",
     "LayoutHandlers",

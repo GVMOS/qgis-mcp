@@ -105,6 +105,11 @@ def test_command_names_are_unique():
     assert not dupes, f"the same command is registered in more than one module: {dupes}"
 
 
+def test_geoserver_manifest_command_is_owned_by_active_handler_mixin():
+    commands = _registered_commands()
+    assert commands["export_geoserver_publish_manifest"] == ["geoserver.py"]
+
+
 def test_every_command_the_mcp_server_sends_is_registered():
     """A command the server sends but the plugin does not register is dead on arrival."""
     missing = sorted(_commands_the_server_sends() - set(_registered_commands()))

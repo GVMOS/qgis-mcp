@@ -728,7 +728,7 @@ class QgisMCPServer(QObject):
         if qvariant.isNull():
             return None
         value = qvariant.value()
-        if isinstance(value, int | float | str | bool | type(None)):
+        if isinstance(value, (int, float, str, bool, type(None))):
             return value
         elif hasattr(value, "toPyDate"):
             return value.toPyDate().isoformat()
@@ -744,7 +744,7 @@ class QgisMCPServer(QObject):
         """Convert a feature attribute value to a JSON-serializable type."""
         if isinstance(value, QVariant):
             return self._convert_to_python_type(value)
-        if isinstance(value, int | float | str | bool | type(None)):
+        if isinstance(value, (int, float, str, bool, type(None))):
             return value
         try:
             return str(value)
@@ -1696,7 +1696,7 @@ class QgisMCPServer(QObject):
                 renderer.setBlueContrastEnhancement,
             )
             ranges = []
-            for setter, b in zip(setters, bands, strict=True):
+            for setter, b in zip(setters, bands):
                 lo, hi = self._band_range(provider, b, min_value, max_value)
                 enhancement = QgsContrastEnhancement(provider.dataType(b))
                 enhancement.setContrastEnhancementAlgorithm(
@@ -3620,7 +3620,7 @@ class QgisMCPServer(QObject):
         siblings = list(parent.children())
         slots = sorted(siblings.index(n) for n in nodes)
         new_order = list(siblings)
-        for slot, node in zip(slots, nodes, strict=True):
+        for slot, node in zip(slots, nodes):
             new_order[slot] = node
         clones = [n.clone() for n in new_order]
         parent.insertChildNodes(0, clones)
