@@ -245,9 +245,7 @@ def _hermes_bat_content(remote: bool) -> str:
     if remote:
         launch_cmd = f'uvx --from "{GITHUB_URL}" qgis-mcp-server'
     elif shutil.which("uv"):
-        launch_cmd = (
-            f'uv --directory "{REPO_DIR}" run --no-sync src/qgis_mcp/server.py'
-        )
+        launch_cmd = f'uv --directory "{REPO_DIR}" run --no-sync src/qgis_mcp/server.py'
     else:
         python = _venv_python()
         launch_cmd = f'"{python}" "{REPO_DIR / "src" / "qgis_mcp" / "server.py"}"'
@@ -274,14 +272,14 @@ def _hermes_instructions(remote: bool) -> None:
     bat_content = _hermes_bat_content(remote)
 
     print()
-    print("  Hermes desktop app (Windows) — manual setup required:")
+    print("  Hermes desktop app (Windows) - manual setup required:")
     print()
-    print(f"  Step 1 — Create the launcher: {bat_path}")
+    print(f"  Step 1 - Create the launcher: {bat_path}")
     print()
     for line in bat_content.splitlines():
         print(f"    {line}")
     print()
-    print(f"  Step 2 — Add to {cfg_path}:")
+    print(f"  Step 2 - Add to {cfg_path}:")
     print()
     bat_escaped = str(bat_path).replace("\\", "\\\\")
     print("    mcpServers:")
@@ -296,7 +294,7 @@ def _hermes_instructions(remote: bool) -> None:
 
 
 def _remove_target(target: Path) -> None:
-    """Remove a plugin target — handles files, symlinks, Windows junctions, and dirs.
+    """Remove a plugin target - handles files, symlinks, Windows junctions, and dirs.
 
     Path.is_symlink() returns False for Windows directory junctions (created via
     `mklink /J`), so we also check os.path.islink() and fall back to rmdir() for
@@ -353,6 +351,7 @@ def uninstall_plugin(profile: str, version: str = "auto") -> None:
 
 # ── Client configuration ───────────────────────────────────────────────────
 
+
 def _jsonc_to_json(text) -> str:
     """Convert potential JSONC json file to valid JSON
 
@@ -363,14 +362,11 @@ def _jsonc_to_json(text) -> str:
         - D: // inside string values preserved
         - E: Trailing commas in objects and arrays
     """
-    caseA = re.sub(r'/\*.*?\*/', '', text, flags=re.DOTALL)
+    caseA = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
     casesBCD = re.sub(
-        r'("(?:\\.|[^"\\])*")|//.*',
-        lambda m: m.group(1) or '',
-        caseA,
-        flags=re.MULTILINE
+        r'("(?:\\.|[^"\\])*")|//.*', lambda m: m.group(1) or "", caseA, flags=re.MULTILINE
     )
-    caseE = re.sub(r',\s*([}\]])', r'\1', casesBCD)
+    caseE = re.sub(r",\s*([}\]])", r"\1", casesBCD)
     return caseE
 
 
@@ -387,10 +383,7 @@ def _read_json(path: Path) -> dict:
         cleaned = _jsonc_to_json(text)
         return json.loads(cleaned)
     except json.JSONDecodeError as e:
-        raise ValueError(
-            f"Failed to parse {path}: not valid JSON or JSONC. "
-            f"Error: {e}"
-        ) from e
+        raise ValueError(f"Failed to parse {path}: not valid JSON or JSONC. Error: {e}") from e
 
 
 def _backup(path: Path) -> None:
@@ -409,7 +402,7 @@ def configure_client(client_name: str, remote: bool) -> None:
     registry = _client_registry()
     info = registry[client_name]
 
-    # Hermes desktop app: YAML config + bat launcher — print instructions only
+    # Hermes desktop app: YAML config + bat launcher - print instructions only
     if info.get("entry_format") == "hermes":
         _hermes_instructions(remote)
         return
@@ -426,8 +419,11 @@ def configure_client(client_name: str, remote: bool) -> None:
             add_args = ["uvx", "--from", GITHUB_URL, "qgis-mcp-server"]
         elif shutil.which("uv"):
             add_args = [
-                "uv", "run", "--no-sync",
-                "--directory", str(REPO_DIR),
+                "uv",
+                "run",
+                "--no-sync",
+                "--directory",
+                str(REPO_DIR),
                 "src/qgis_mcp/server.py",
             ]
         else:
@@ -485,7 +481,7 @@ def unconfigure_client(client_name: str) -> None:
     registry = _client_registry()
     info = registry[client_name]
 
-    # Hermes: manual YAML edit required — just advise the user
+    # Hermes: manual YAML edit required - just advise the user
     if info.get("entry_format") == "hermes":
         hermes_cfg = info.get("hermes_cfg")
         cfg_hint = str(hermes_cfg) if hermes_cfg else "%APPDATA%\\Hermes\\config.yaml"
@@ -531,8 +527,20 @@ def unconfigure_client(client_name: str) -> None:
 # ── Interactive menu ────────────────────────────────────────────────────────
 
 ALL_CLIENTS = [
-    "claude-desktop", "cursor", "vscode", "windsurf", "zed", "claude-code", "codex",
-    "opencode", "hermes", "kimi", "gemini", "qwen", "copilot-cli", "lmstudio",
+    "claude-desktop",
+    "cursor",
+    "vscode",
+    "windsurf",
+    "zed",
+    "claude-code",
+    "codex",
+    "opencode",
+    "hermes",
+    "kimi",
+    "gemini",
+    "qwen",
+    "copilot-cli",
+    "lmstudio",
 ]
 
 

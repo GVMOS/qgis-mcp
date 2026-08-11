@@ -74,7 +74,7 @@ def test_strip_instance_param_is_a_no_op_with_several_instances():
 
 @pytest.mark.asyncio
 async def test_listing_reports_which_qgis_answered():
-    """Two windows can share a version and a profile — pid and title separate them."""
+    """Two windows can share a version and a profile - pid and title separate them."""
     import qgis_mcp.server as srv
 
     info = {
@@ -82,7 +82,7 @@ async def test_listing_reports_which_qgis_answered():
         "profile_folder": "C:/Users/x/AppData/Roaming/QGIS/QGIS4\\profiles\\default/",
         "plugins_count": 5,
         "pid": 11440,
-        "window_title": "city.qgz — QGIS",
+        "window_title": "city.qgz - QGIS",
     }
     with (
         patch.dict(os.environ, {"QGIS_MCP_INSTANCES": "a=9876,b=9877"}, clear=True),
@@ -93,7 +93,7 @@ async def test_listing_reports_which_qgis_answered():
 
     reachable, unreachable = result["instances"]
     assert reachable["pid"] == 11440
-    assert reachable["window_title"] == "city.qgz — QGIS"
+    assert reachable["window_title"] == "city.qgz - QGIS"
     assert reachable["qgis_version"] == "4.0.2-Norrköping"
     # Basename for humans, full path to separate same-named profiles under
     # different roots. Windows mixes separators, hence the normalisation.
@@ -204,7 +204,7 @@ def test_closed_instance_uses_the_short_schedule_once_anything_connected():
 
 
 def test_refusal_is_not_retried_once_anything_connected():
-    """Refused means nothing is listening — repeating the call cannot change that.
+    """Refused means nothing is listening - repeating the call cannot change that.
 
     Each attempt costs the OS's refusal latency (~2s on Windows loopback), so
     retrying a closed instance three times just triples a known answer.
@@ -256,7 +256,7 @@ def test_refusal_is_still_retried_during_cold_start():
 
 
 def test_timeouts_are_still_retried():
-    """A timeout is not a refusal — a slow host deserves the retries."""
+    """A timeout is not a refusal - a slow host deserves the retries."""
     import qgis_mcp.server as srv
 
     with (
@@ -290,7 +290,7 @@ def test_connect_records_why_it_failed():
 
 
 def test_cold_start_keeps_the_patient_schedule():
-    """Nothing has answered yet, so QGIS may still be coming up — stay patient."""
+    """Nothing has answered yet, so QGIS may still be coming up - stay patient."""
     import qgis_mcp.server as srv
 
     with (
@@ -314,7 +314,7 @@ def test_cold_start_keeps_the_patient_schedule():
 
 
 class _VanishingSocket:
-    """Reads as a live socket once, then None — a disconnect landing mid-probe."""
+    """Reads as a live socket once, then None - a disconnect landing mid-probe."""
 
     def __init__(self):
         self.reads = 0
@@ -401,15 +401,15 @@ async def test_resource_descriptions_name_the_implicit_instance():
     # Templated URIs (qgis://layers/{layer_id}/...) are reported separately from
     # the static ones, and every one of them reads through _send_sync.
     static = [(str(r.uri), r.description) for r in await srv.mcp.list_resources()]
-    templates = [
-        (t.uriTemplate, t.description) for t in await srv.mcp.list_resource_templates()
-    ]
+    templates = [(t.uriTemplate, t.description) for t in await srv.mcp.list_resource_templates()]
     routed = [
         (uri, description)
         for uri, description in static + templates
         if uri.startswith("qgis://") and "llms" not in uri and "cache" not in uri
     ]
-    undocumented = [uri for uri, description in routed if "implicit instance" not in (description or "")]
+    undocumented = [
+        uri for uri, description in routed if "implicit instance" not in (description or "")
+    ]
 
     assert len(routed) == 6, f"expected 6 instance-routed resources, got {[u for u, _ in routed]}"
     assert undocumented == [], f"undocumented routing on: {undocumented}"

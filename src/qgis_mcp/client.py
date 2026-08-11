@@ -19,13 +19,15 @@ from qgis_mcp.protocol import (
     TIMEOUT_DEFAULT,
     TIMEOUT_LONG,
     get_auth_token,
+    get_client_version,
+    get_install_info,
 )
 
 logger = logging.getLogger("QgisMCPClient")
 
 # Cap the TCP handshake. Without it connect() inherits the OS default, so a host
 # that routes but has nothing listening (easy to configure now that instances
-# carry their own host) stalls ~21s per attempt — times the retry schedule, that
+# carry their own host) stalls ~21s per attempt - times the retry schedule, that
 # is minutes for one tool call. A local refusal is immediate either way.
 _CONNECT_TIMEOUT = 3.0
 
@@ -103,7 +105,24 @@ class QgisMCPClient:
         if not self.socket:
             raise ConnectionError("Not connected to server")
 
-        command = {"type": command_type, "params": params or {}}
+        # The plugin reads `client_version` to tell the user when the two halves
+        # have drifted apart, a real risk since the uvx cache pins the server
+        # while QGIS keeps upgrading the plugin. `client_install` tells it which
+        # update command to name: only this side can tell a uvx launch from a
+        # source checkout, so without it the plugin can report the drift but not
+        # what to do about it. The command itself is never sent, only the kind
+        # of install, because the plugin puts it in front of the user as
+        # something to run. An older plugin ignores the extra keys, so this is
+        # safe in both directions.
+        install_kind, install_root = get_install_info()
+        command = {
+            "type": command_type,
+            "params": params or {},
+            "client_version": get_client_version(),
+            "client_install": install_kind,
+        }
+        if install_root:
+            command["client_root"] = install_root
 
         # Attach the shared-secret token when QGIS_MCP_TOKEN is configured. No-op
         # when auth is disabled, so existing setups are unaffected.
@@ -138,7 +157,7 @@ class QgisMCPClient:
             self.disconnect()
             raise ConnectionError(f"Socket operation timed out after {timeout}s") from err
         except ValueError as err:
-            # Protocol framing error (e.g. "Response too large") — the socket
+            # Protocol framing error (e.g. "Response too large") - the socket
             # buffer is now out of sync, so close it and let callers reconnect.
             self.disconnect()
             raise ConnectionError("Protocol framing error, connection reset") from err
@@ -148,7 +167,7 @@ class QgisMCPClient:
         except Exception as e:
             # Any other exception during framed I/O (e.g. _recv_exact's
             # "Response too large" guard, json errors, struct errors) leaves
-            # the socket in an unknown state — close it so we don't reuse a
+            # the socket in an unknown state - close it so we don't reuse a
             # desynced stream on the next call.
             logger.exception("Error sending command")
             self.disconnect()
@@ -230,7 +249,9 @@ class QgisMCPClient:
 
     def execute_processing(self, algorithm, parameters):
         return self.send_command(
-            "execute_processing", {"algorithm": algorithm, "parameters": parameters}, timeout=TIMEOUT_LONG
+            "execute_processing",
+            {"algorithm": algorithm, "parameters": parameters},
+            timeout=TIMEOUT_LONG,
         )
 
     def save_project(self, path=None):

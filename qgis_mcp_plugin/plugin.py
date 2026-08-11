@@ -1,123 +1,25 @@
-import base64
+"""QGIS plugin entry point: toolbar action, menu, and server start/stop.
+
+The socket server lives in :mod:`qgis_mcp_plugin.server` and the MCP client
+configurator in :mod:`qgis_mcp_plugin.configurator`.
+"""
+
 import contextlib
-import errno
-import fnmatch
-import io
 import json
-import math
 import os
-import re
-import secrets
-import shutil
-import socket
-import struct
-import sys
-import tempfile
-import traceback
-from collections import deque
 from pathlib import Path
-from typing import ClassVar
 
-# Compatibility for different python versions
-try:
-    from datetime import UTC, datetime
-except ImportError:
-    from datetime import datetime, timezone
-
-    UTC = timezone.utc  # noqa: UP017  (fallback path: datetime.UTC unavailable pre-3.11)
-
-from qgis.core import (
-    Qgis,
-    QgsAbstractDatabaseProviderConnection,
-    QgsApplication,
-    QgsCategorizedSymbolRenderer,
-    QgsClassificationEqualInterval,
-    QgsColorRampShader,
-    QgsContrastEnhancement,
-    QgsCoordinateReferenceSystem,
-    QgsCoordinateTransform,
-    QgsDataSourceUri,
-    QgsExpression,
-    QgsExpressionContext,
-    QgsExpressionContextUtils,
-    QgsFeature,
-    QgsFeatureRequest,
-    QgsField,
-    QgsGeometry,
-    QgsGraduatedSymbolRenderer,
-    QgsHillshadeRenderer,
-    QgsLayerTreeGroup,
-    QgsLayerTreeLayer,
-    QgsLayoutExporter,
-    QgsLayoutItemMap,
-    QgsLayoutPoint,
-    QgsLayoutSize,
-    QgsMapRendererParallelJob,
-    QgsMapSettings,
-    QgsMessageLog,
-    QgsMultiBandColorRenderer,
-    QgsPointXY,
-    QgsPrintLayout,
-    QgsProcessingModelAlgorithm,
-    QgsProcessingModelChildAlgorithm,
-    QgsProcessingModelChildParameterSource,
-    QgsProcessingModelOutput,
-    QgsProcessingModelParameter,
-    QgsProcessingParameterBoolean,
-    QgsProcessingParameterCrs,
-    QgsProcessingParameterDistance,
-    QgsProcessingParameterEnum,
-    QgsProcessingParameterExtent,
-    QgsProcessingParameterFeatureSource,
-    QgsProcessingParameterField,
-    QgsProcessingParameterFile,
-    QgsProcessingParameterMultipleLayers,
-    QgsProcessingParameterNumber,
-    QgsProcessingParameterPoint,
-    QgsProcessingParameterRasterLayer,
-    QgsProcessingParameterString,
-    QgsProcessingParameterVectorLayer,
-    QgsProject,
-    QgsProviderRegistry,
-    QgsRasterLayer,
-    QgsRasterShader,
-    QgsRectangle,
-    QgsRendererCategory,
-    QgsSettings,
-    QgsSingleBandGrayRenderer,
-    QgsSingleBandPseudoColorRenderer,
-    QgsSingleSymbolRenderer,
-    QgsStyle,
-    QgsSymbol,
-    QgsVectorLayer,
-    QgsVectorLayerExporter,
-    QgsVectorLayerJoinInfo,
-    QgsVectorSimplifyMethod,
-    QgsWkbTypes,
-)
-from qgis.PyQt.QtCore import (
-    QBuffer,
-    QByteArray,
-    QEventLoop,
-    QObject,
-    QPointF,
-    QSize,
-    QTimer,
-    QUrl,
-    QVariant,
-)
-from qgis.PyQt.QtGui import QColor, QDesktopServices, QIcon, QImage, QPainter, QPen
+from qgis.core import QgsMessageLog, QgsSettings
+from qgis.PyQt.QtCore import QSize, QTimer, QUrl
+from qgis.PyQt.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPen
 from qgis.PyQt.QtWidgets import (
     QAction,
     QCheckBox,
-    QComboBox,
     QDialog,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QMenu,
     QMessageBox,
-    QPlainTextEdit,
     QPushButton,
     QSpinBox,
     QToolButton,
@@ -125,67 +27,18 @@ from qgis.PyQt.QtWidgets import (
     QWidget,
     QWidgetAction,
 )
-from qgis.utils import active_plugins, available_plugins, pluginMetadata, reloadPlugin
 
 from .compat import (
-    AGG_ARRAY,
-    AGG_COUNT,
-    AGG_MAX,
-    AGG_MEAN,
-    AGG_MIN,
-    AGG_STDEV,
-    AGG_SUM,
     ALIGN_CENTER,
-    CONN_CAP_EXECUTE_SQL,
-    CONN_CAP_SCHEMAS,
-    CONN_CAP_SQL_LAYERS,
-    CONN_TABLE_ASPATIAL,
-    CONN_TABLE_RASTER,
-    CONN_TABLE_VECTOR,
-    CONN_TABLE_VIEW,
-    CONTRAST_CLIP_MINMAX,
-    CONTRAST_NONE,
-    CONTRAST_STRETCH_CLIP_MINMAX,
-    CONTRAST_STRETCH_MINMAX,
-    EXPORT_SUCCESS,
-    GEOM_LINE,
-    GEOM_POLYGON,
-    GRAY_BLACK_TO_WHITE,
-    GRAY_WHITE_TO_BLACK,
-    IODEVICE_WRITEONLY,
-    LAYER_RASTER,
-    LAYER_VECTOR,
-    LAYOUT_SUCCESS,
     MSG_CRITICAL,
     MSG_INFO,
-    MSG_WARNING,
     MSGBOX_ACCEPT_ROLE,
     MSGBOX_QUESTION,
     MSGBOX_REJECT_ROLE,
     PAINTER_ANTIALIAS,
-    PROC_FILE_FOLDER,
-    PROC_NUM_INTEGER,
-    PROCESSING_OPTIONAL,
-    QVAR_BOOL,
-    QVAR_DATE,
-    QVAR_DATETIME,
-    QVAR_DOUBLE,
-    QVAR_INT,
-    QVAR_STRING,
-    RASTER_STATS_ALL,
-    SHADER_CLASS_CONTINUOUS,
-    SHADER_CLASS_EQUAL_INTERVAL,
-    SHADER_CLASS_QUANTILE,
-    SHADER_DISCRETE,
-    SHADER_EXACT,
-    SHADER_INTERPOLATED,
-    SIMPLIFY_ANTIALIAS,
-    SIMPLIFY_GEOMETRY,
     TOOLBUTTON_ICON_ONLY,
     TOOLBUTTON_MENU_POPUP,
-    WKB_NO_GEOMETRY,
 )
-
 _DEFAULT_HOST = "localhost"
 _DEFAULT_PORT = 9876
 # "someone else already holds this port". EADDRINUSE is the usual answer, and is
@@ -4651,14 +4504,20 @@ class MCPConfiguratorDialog(QDialog):
             QgsMessageLog.logMessage(f"Failed to configure {client}: {e}", "MCP", MSG_CRITICAL)
             self.status_label.setText(f"Status: Failed to write: {e}")
             self.status_label.setStyleSheet("color: red;")
+from .configurator import (
+    MCPConfiguratorDialog,
+    _client_config_registry,
+    _qgis_entry_has_refresh,
+    _remove_refresh_from_entry,
+)
+from .constants import DEFAULT_PORT, SETTINGS_PREFIX
+from .server import QgisMCPServer
 
 
 class QgisMCPPlugin:
     """Main plugin class for QGIS MCP"""
 
     REPO_URL = "https://github.com/nkarasiak/qgis-mcp"
-
-    SETTINGS_PREFIX = "qgis_mcp"
 
     def __init__(self, iface):
         self.iface = iface
@@ -4679,13 +4538,13 @@ class QgisMCPPlugin:
         # Main action (used for menu entry + click handler)
         self.action = QAction(self._logo_icon(), "Run MCP", self.iface.mainWindow())
         self.action.setCheckable(True)
-        self.action.setToolTip(f"Start MCP server on port {_DEFAULT_PORT}")
+        self.action.setToolTip(f"Start MCP server on port {DEFAULT_PORT}")
         self.action.triggered.connect(self.toggle_server)
 
         # Port config in dropdown menu
         self.port_spin = QSpinBox()
         self.port_spin.setRange(1024, 65535)
-        self.port_spin.setValue(_DEFAULT_PORT)
+        self.port_spin.setValue(DEFAULT_PORT)
         self.port_spin.setPrefix("Port: ")
         self.port_spin.valueChanged.connect(self._save_port)
 
@@ -4702,7 +4561,7 @@ class QgisMCPPlugin:
         self.autostart_cb = QCheckBox("Auto-start on startup")
         settings = QgsSettings()
         self.autostart_cb.setChecked(
-            settings.value(f"{self.SETTINGS_PREFIX}/autostart", False, type=bool)
+            settings.value(f"{SETTINGS_PREFIX}/autostart", False, type=bool)
         )
         self.autostart_cb.toggled.connect(self._save_autostart)
 
@@ -4732,7 +4591,9 @@ class QgisMCPPlugin:
         self.tool_button.setToolButtonStyle(TOOLBUTTON_ICON_ONLY)
         self._toolbar_action = toolbar.addWidget(self.tool_button)
 
-        self.help_action = QAction(self._logo_icon(), "MCP Setup Configurator", self.iface.mainWindow())
+        self.help_action = QAction(
+            self._logo_icon(), "MCP Setup Configurator", self.iface.mainWindow()
+        )
         self.help_action.triggered.connect(self._show_help)
 
         self.iface.addPluginToMenu("QGIS MCP", self.action)
@@ -4745,7 +4606,7 @@ class QgisMCPPlugin:
                 break
 
         # Restore saved port
-        saved_port = settings.value(f"{self.SETTINGS_PREFIX}/port", _DEFAULT_PORT, type=int)
+        saved_port = settings.value(f"{SETTINGS_PREFIX}/port", DEFAULT_PORT, type=int)
         self.port_spin.setValue(saved_port)
 
         # Auto-start if enabled
@@ -4760,10 +4621,10 @@ class QgisMCPPlugin:
     def _proactive_setup_check(self):
         """Show a welcome dialog on first install."""
         settings = QgsSettings()
-        first_run = settings.value(f"{self.SETTINGS_PREFIX}/first_run", True, type=bool)
+        first_run = settings.value(f"{SETTINGS_PREFIX}/first_run", True, type=bool)
         if not first_run:
             return
-        settings.setValue(f"{self.SETTINGS_PREFIX}/first_run", False)
+        settings.setValue(f"{SETTINGS_PREFIX}/first_run", False)
 
         dlg = QDialog(self.iface.mainWindow())
         dlg.setWindowTitle("Welcome to QGIS MCP")
@@ -4811,11 +4672,11 @@ class QgisMCPPlugin:
 
     def _save_autostart(self, checked):
         """Persist auto-start preference."""
-        QgsSettings().setValue(f"{self.SETTINGS_PREFIX}/autostart", checked)
+        QgsSettings().setValue(f"{SETTINGS_PREFIX}/autostart", checked)
 
     def _save_port(self, port):
         """Persist port preference."""
-        QgsSettings().setValue(f"{self.SETTINGS_PREFIX}/port", port)
+        QgsSettings().setValue(f"{SETTINGS_PREFIX}/port", port)
 
     def _green_logo_icon(self):
         """Load the green MCP logo for active state."""
@@ -4828,7 +4689,7 @@ class QgisMCPPlugin:
             return self._green_logo_icon()
         pixmap = self._green_logo_icon().pixmap(QSize(64, 64))
         size = pixmap.width()
-        d = int(size * 0.45)  # badge diameter — large enough to survive toolbar downscale
+        d = int(size * 0.45)  # badge diameter - large enough to survive toolbar downscale
         x = 0
         y = size - d  # bottom-left corner
         painter = QPainter(pixmap)
@@ -4855,16 +4716,32 @@ class QgisMCPPlugin:
         self.action.setIcon(self._badge_icon(count))
         plural = "client" if count == 1 else "clients"
         self.action.setToolTip(
-            f"MCP server running on :{port} — {count} {plural} connected — click to stop"
+            f"MCP server running on :{port} - {count} {plural} connected - click to stop"
         )
+
+    def _start_server_from_dialog(self):
+        """Start the socket server on behalf of the configurator dialog.
+
+        Returns the running server, or None if it failed to bind. Goes through
+        the toolbar action so the icon and checked state stay in sync.
+        """
+        if self.server is None:
+            self.action.setChecked(True)
+            self.toggle_server(True)
+        return self.server
 
     def _show_help(self):
         """Show the MCP Setup & Configurator dialog."""
-        dlg = MCPConfiguratorDialog(self.iface, self.iface.mainWindow())
+        dlg = MCPConfiguratorDialog(
+            self.iface,
+            self.iface.mainWindow(),
+            server=self.server,
+            start_server=self._start_server_from_dialog,
+        )
         dlg.exec()
         # Reflect an auto-start change made in the dialog onto the toolbar checkbox.
         if hasattr(self, "autostart_cb"):
-            saved = QgsSettings().value(f"{self.SETTINGS_PREFIX}/autostart", False, type=bool)
+            saved = QgsSettings().value(f"{SETTINGS_PREFIX}/autostart", False, type=bool)
             if self.autostart_cb.isChecked() != saved:
                 self.autostart_cb.blockSignals(True)
                 self.autostart_cb.setChecked(saved)
@@ -4878,7 +4755,7 @@ class QgisMCPPlugin:
         those entries and offer a one-click rewrite to the cached version.
         """
         settings = QgsSettings()
-        if settings.value(f"{self.SETTINGS_PREFIX}/refresh_removal_prompted", False, type=bool):
+        if settings.value(f"{SETTINGS_PREFIX}/refresh_removal_prompted", False, type=bool):
             return
 
         repo_dir = Path(__file__).resolve().parent.parent
@@ -4899,14 +4776,14 @@ class QgisMCPPlugin:
                 affected.append((client, path, info["key"], data))
 
         if not affected:
-            return  # nothing to migrate — stay silent
+            return  # nothing to migrate - stay silent
 
         # Prompt once, regardless of choice.
-        settings.setValue(f"{self.SETTINGS_PREFIX}/refresh_removal_prompted", True)
+        settings.setValue(f"{SETTINGS_PREFIX}/refresh_removal_prompted", True)
 
         clients = ", ".join(sorted({c for c, *_ in affected}))
         box = QMessageBox(self.iface.mainWindow())
-        box.setWindowTitle("QGIS MCP — fix offline startup?")
+        box.setWindowTitle("QGIS MCP - fix offline startup?")
         box.setIcon(MSGBOX_QUESTION)
         box.setText(
             f"Your MCP config for {clients} uses '--refresh-package', which "
@@ -4945,12 +4822,14 @@ class QgisMCPPlugin:
         if checked:
             port = self.port_spin.value()
             self.server = QgisMCPServer(
-                port=port, iface=self.iface, on_clients_changed=self._on_clients_changed
+                port=port,
+                iface=self.iface,
+                on_clients_changed=self._on_clients_changed,
             )
             if self.server.start():
                 self.action.setIcon(self._green_logo_icon())
                 self.action.setText(f"MCP :{port}")
-                self.action.setToolTip(f"MCP server running on :{port} — click to stop")
+                self.action.setToolTip(f"MCP server running on :{port} - click to stop")
                 self.port_spin.setEnabled(False)
             else:
                 # Without this the button just pops back out and the only trace is a
@@ -4990,6 +4869,5 @@ class QgisMCPPlugin:
             self.autostart_cb.toggled.disconnect(self._save_autostart)
 
 
-# Plugin entry point
 def classFactory(iface):
     return QgisMCPPlugin(iface)

@@ -1,17 +1,16 @@
 """Shared helpers for server.py and compound_tools.py.
 
 Imports only from ``mcp``, stdlib, and the stdlib-only ``protocol``
-module — no circular-import risk. Protocol constants live in
+module - no circular-import risk. Protocol constants live in
 ``protocol.py`` (and are re-exported here) so the client stays
 importable without the ``mcp`` package.
 """
 
-import importlib.metadata
 import json
 
 from mcp.types import Annotations, ImageContent, ResourceLink, TextContent
 
-from qgis_mcp.protocol import (  # noqa: F401 — re-exported for server-side importers
+from qgis_mcp.protocol import (  # noqa: F401 - re-exported for server-side importers
     BATCH_BLOCKED_COMMANDS,
     DEFAULT_HOST,
     DEFAULT_PORT,
@@ -21,14 +20,15 @@ from qgis_mcp.protocol import (  # noqa: F401 — re-exported for server-side im
     TIMEOUT_DEFAULT,
     TIMEOUT_LONG,
     get_auth_token,
+    get_client_version,
+    get_update_command,
 )
 
 
 def enrich_diagnose(result: dict) -> dict:
     """Append server/plugin version-match check to a diagnose result."""
-    try:
-        server_version = importlib.metadata.version("qgis-mcp")
-    except importlib.metadata.PackageNotFoundError:
+    server_version = get_client_version()
+    if server_version == "unknown":
         server_version = "unknown (editable install?)"
 
     plugin_version = None
@@ -38,13 +38,20 @@ def enrich_diagnose(result: dict) -> dict:
             break
 
     version_match = "ok" if plugin_version == server_version else "mismatch"
-    result["checks"].append(
-        {
-            "name": "version_match",
-            "status": version_match,
-            "detail": {"server": server_version, "plugin": plugin_version},
-        }
-    )
+    detail = {"server": server_version, "plugin": plugin_version}
+    if version_match == "mismatch":
+        # The whole point of reporting a mismatch is that someone can act on it.
+        # Say what it actually costs, too: mismatched halves keep working, and a
+        # report that reads like an outage gets ignored the next time it matters.
+        detail["fix"] = get_update_command()
+        detail["restart_after_fix"] = True
+        detail["note"] = (
+            "Not fatal. Mismatched halves keep working; tools added since the "
+            "older half was built will be missing or refused, so matching them "
+            "is recommended rather than required. Restart your MCP client after "
+            "running the fix."
+        )
+    result["checks"].append({"name": "version_match", "status": version_match, "detail": detail})
     if version_match == "mismatch" and result["status"] == "healthy":
         result["status"] = "degraded"
 

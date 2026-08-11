@@ -3,6 +3,7 @@
 import contextlib
 import json
 import os
+import re
 import sys
 import threading
 from unittest.mock import AsyncMock, MagicMock, call, patch
@@ -32,12 +33,12 @@ def mock_connection():
 def _make_ctx(*, elicitation="confirm"):
     """Create a mock Context with async methods.
 
-    elicitation: "confirm" (default) — user confirms destructive ops.
-                 "decline" — user refuses.
-                 "unsupported" — client doesn't support elicitation (raises McpError).
+    elicitation: "confirm" (default) - user confirms destructive ops.
+                 "decline" - user refuses.
+                 "unsupported" - client doesn't support elicitation (raises McpError).
 
     The responses mirror the real SDK: `data` is a model instance (not a dict),
-    and an unsupported client raises McpError — mocking a bare Exception with a
+    and an unsupported client raises McpError - mocking a bare Exception with a
     dict payload is what let #27 hide.
     """
     ctx = MagicMock()
@@ -287,6 +288,39 @@ async def test_execute_processing_uses_long_timeout(mock_connection):
         timeout=60,
     )
     ctx.info.assert_awaited_once_with("Running algorithm: native:buffer")
+
+
+@pytest.mark.asyncio
+async def test_execute_processing_default_sends_no_plugin_timeout(mock_connection):
+    """Without an explicit timeout the plugin applies its own default."""
+    mock_connection.send_command.return_value = {
+        "status": "success",
+        "result": {"algorithm": "test", "result": {}},
+    }
+    from qgis_mcp.server import execute_processing
+
+    await execute_processing(_make_ctx(), algorithm="native:buffer", parameters={})
+    sent_params = mock_connection.send_command.call_args[0][1]
+    assert "timeout" not in sent_params
+
+
+@pytest.mark.asyncio
+async def test_execute_processing_custom_timeout_outlives_plugin_deadline(mock_connection):
+    """The socket must outlast the plugin's deadline.
+
+    If the client gave up first, a slow algorithm would surface as an opaque
+    socket timeout while QGIS kept working on an orphaned job.
+    """
+    mock_connection.send_command.return_value = {
+        "status": "success",
+        "result": {"algorithm": "test", "result": {}},
+    }
+    from qgis_mcp.server import execute_processing
+
+    await execute_processing(_make_ctx(), algorithm="native:buffer", parameters={}, timeout=300)
+    args, kwargs = mock_connection.send_command.call_args
+    assert args[1]["timeout"] == 300, "plugin must receive the algorithm deadline"
+    assert kwargs["timeout"] > 300, "socket timeout must outlast the plugin deadline"
 
 
 @pytest.mark.asyncio
@@ -616,7 +650,7 @@ async def test_create_processing_model_tool(mock_connection):
     assert output["registered"] is True
     assert output["requested_name"] == "buffer_centroids"
 
-    # Long timeout, full payload forwarded — no path/register/overwrite fields anymore
+    # Long timeout, full payload forwarded - no path/register/overwrite fields anymore
     mock_connection.send_command.assert_called_once()
     call_args = mock_connection.send_command.call_args
     assert call_args[0][0] == "create_processing_model"
@@ -1166,6 +1200,49 @@ async def test_remove_layer_confirmed_by_user(mock_connection):
     assert output == {"ok": True}
 
 
+@pytest.mark.asyncio
+async def test_unset_auto_confirm_skips_elicitation(mock_connection):
+    """Default (var unset): proceed without ever eliciting."""
+    mock_connection.send_command.return_value = {"status": "success", "result": {"ok": True}}
+    from qgis_mcp.server import remove_layer
+
+    ctx = _make_ctx(elicitation="decline")
+    with patch.dict(os.environ, clear=False):
+        os.environ.pop("QGIS_MCP_AUTO_CONFIRM", None)
+        output = await remove_layer(ctx, layer_id="test_layer")
+    assert output == {"ok": True}
+    ctx.elicit.assert_not_called()
+    mock_connection.send_command.assert_called_once()
+
+
+@pytest.mark.parametrize("value", ["1", "true", "yes", "on", "", "banana"])
+@pytest.mark.asyncio
+async def test_non_falsy_auto_confirm_skips_elicitation(mock_connection, value):
+    """Only 0/false/no/off re-enable the prompt - anything else skips it."""
+    mock_connection.send_command.return_value = {"status": "success", "result": {"ok": True}}
+    from qgis_mcp.server import remove_layer
+
+    ctx = _make_ctx(elicitation="decline")
+    with patch.dict(os.environ, {"QGIS_MCP_AUTO_CONFIRM": value}):
+        output = await remove_layer(ctx, layer_id="test_layer")
+    assert output == {"ok": True}
+    ctx.elicit.assert_not_called()
+
+
+@pytest.mark.parametrize("value", ["0", "false", "NO", " off "])
+@pytest.mark.asyncio
+async def test_falsy_auto_confirm_elicits(mock_connection, value):
+    """QGIS_MCP_AUTO_CONFIRM=0/false/no/off restores the confirmation prompt."""
+    from qgis_mcp.server import remove_layer
+
+    ctx = _make_ctx(elicitation="decline")
+    with patch.dict(os.environ, {"QGIS_MCP_AUTO_CONFIRM": value}):
+        output = await remove_layer(ctx, layer_id="test_layer")
+    assert output == {"ok": False, "message": "Cancelled by user"}
+    ctx.elicit.assert_called_once()
+    mock_connection.send_command.assert_not_called()
+
+
 # --- Env var configuration tests ---
 
 
@@ -1289,7 +1366,7 @@ async def test_diagnose_tool(mock_connection):
     from qgis_mcp.server import diagnose
 
     ctx = _make_ctx()
-    with patch("qgis_mcp.helpers.importlib.metadata.version", return_value="0.1.3"):
+    with patch("qgis_mcp.helpers.get_client_version", return_value="0.1.3"):
         output = await diagnose(ctx)
     assert output["status"] == "healthy"
     # Should have added version_match check
@@ -1312,7 +1389,7 @@ async def test_diagnose_version_mismatch(mock_connection):
     from qgis_mcp.server import diagnose
 
     ctx = _make_ctx()
-    with patch("qgis_mcp.helpers.importlib.metadata.version", return_value="0.1.3"):
+    with patch("qgis_mcp.helpers.get_client_version", return_value="0.1.3"):
         output = await diagnose(ctx)
     assert output["status"] == "degraded"
     version_check = next(c for c in output["checks"] if c["name"] == "version_match")
@@ -1533,9 +1610,7 @@ async def test_add_bookmark_tool(mock_connection):
     from qgis_mcp.server import add_bookmark
 
     ctx = _make_ctx()
-    output = await add_bookmark(
-        ctx, name="Munich", xmin=11.3, ymin=48.0, xmax=11.8, ymax=48.3
-    )
+    output = await add_bookmark(ctx, name="Munich", xmin=11.3, ymin=48.0, xmax=11.8, ymax=48.3)
     assert output["ok"] is True
     call_params = mock_connection.send_command.call_args[0][1]
     assert call_params["name"] == "Munich"
@@ -1667,9 +1742,7 @@ async def test_list_processing_models(mock_connection):
 
     result = await list_processing_models(_make_ctx())
     assert result["count"] == 1
-    mock_connection.send_command.assert_called_once_with(
-        "list_processing_models", None, timeout=30
-    )
+    mock_connection.send_command.assert_called_once_with("list_processing_models", None, timeout=30)
 
 
 @pytest.mark.asyncio
@@ -1736,9 +1809,7 @@ async def test_export_layer_with_reproject(mock_connection):
     }
     from qgis_mcp.server import export_layer
 
-    await export_layer(
-        _make_ctx(), layer_id="lyr", output_path="out.gpkg", target_crs="EPSG:4326"
-    )
+    await export_layer(_make_ctx(), layer_id="lyr", output_path="out.gpkg", target_crs="EPSG:4326")
     mock_connection.send_command.assert_called_once_with(
         "export_layer",
         {
@@ -2151,7 +2222,7 @@ async def test_server_advertises_tools():
     tool_names = [t.name for t in tools]
 
     # Core tools that every MCP client depends on for basic interoperability
-    assert "ping" in tool_names, "ping tool missing — clients use it to verify connectivity"
+    assert "ping" in tool_names, "ping tool missing - clients use it to verify connectivity"
     assert "get_layers" in tool_names, "get_layers tool missing"
     assert "render_map" in tool_names, "render_map tool missing"
 
@@ -2166,7 +2237,7 @@ async def test_server_tool_schemas_are_valid():
     """Every registered tool must have a non-empty name and description.
 
     Generic MCP clients (including Nous/Hermes agents) rely on tool metadata
-    to build system prompts and tool-call payloads — missing descriptions
+    to build system prompts and tool-call payloads - missing descriptions
     degrade agent reasoning quality.
     """
     from qgis_mcp.server import mcp
@@ -2234,7 +2305,7 @@ def test_compound_mode_covers_every_granular_command():
     """Compound mode must reach every plugin command the granular tools expose.
 
     Compound mode is meant to be a re-packaging of the same surface, not a
-    subset — an action missing here means the feature is unreachable for any
+    subset - an action missing here means the feature is unreachable for any
     client running with QGIS_MCP_TOOL_MODE=compound.
     """
     import re
@@ -2311,7 +2382,9 @@ async def test_compound_field_and_analysis_dispatch():
         assert params["stats"] == [0, 2]
         assert params["band"] == 1
 
-        await client.call_tool("processing", {"action": "run_model", "params": {"model": "model:x"}})
+        await client.call_tool(
+            "processing", {"action": "run_model", "params": {"model": "model:x"}}
+        )
         cmd, params = send.call_args[0][:2]
         assert cmd == "run_model"
         assert params == {"model": "model:x", "parameters": {}}
@@ -2419,7 +2492,9 @@ def test_unknown_instance_error_lists_configured_names():
 
     with (
         patch.dict(os.environ, {"QGIS_MCP_INSTANCES": "a=9876,b=9877"}, clear=True),
-        pytest.raises(ValueError, match=r"Unknown QGIS instance: 'nope'.*Configured instances: a, b"),
+        pytest.raises(
+            ValueError, match=r"Unknown QGIS instance: 'nope'.*Configured instances: a, b"
+        ),
     ):
         resolve_instance("nope")
 
@@ -2435,7 +2510,7 @@ def test_instance_less_call_falls_back_to_first_entry():
 
     with patch.dict(os.environ, {"QGIS_MCP_INSTANCES": "a=9876,b=9877"}, clear=True):
         assert resolve_instance(None) == "a"
-    # Written in the other order, the other entry wins — insertion order, not sorted.
+    # Written in the other order, the other entry wins - insertion order, not sorted.
     with patch.dict(os.environ, {"QGIS_MCP_INSTANCES": "zeta=9877,alpha=9876"}, clear=True):
         assert resolve_instance(None) == "zeta"
 
@@ -2452,7 +2527,7 @@ def test_compound_mode_refuses_multiple_instances():
     """Compound tools cannot select an instance, so the combination must not start.
 
     Silently routing every compound call to one instance while the config
-    advertises several is a wrong-instance write with no error — worse than
+    advertises several is a wrong-instance write with no error - worse than
     refusing to boot.
     """
     import subprocess
@@ -2671,7 +2746,13 @@ async def test_every_tool_forwards_instance():
 
     def dummy(annotation):
         text = str(annotation)
-        for needle, value in (("list", []), ("dict", {}), ("bool", False), ("float", 1.0), ("int", 1)):
+        for needle, value in (
+            ("list", []),
+            ("dict", {}),
+            ("bool", False),
+            ("float", 1.0),
+            ("int", 1),
+        ):
             if needle in text:
                 return value
         return "x"
@@ -2723,7 +2804,7 @@ async def test_list_qgis_instances_reports_configuration_and_reachability():
             {"name": "a", "host": "localhost", "port": 9876, "reachable": True},
             {"name": "b", "host": "lab", "port": 9877, "reachable": False},
         ],
-        # No entry is named 'default', so instance-less calls land on 'a' —
+        # No entry is named 'default', so instance-less calls land on 'a' -
         # reporting the constant "default" here would misdirect every caller
         # that reads this field to find out where its calls go.
         "implicit_instance": "a",
@@ -2776,7 +2857,7 @@ def test_probe_instance_reports_reachable_listener():
 def _stub_plugin_server(label, stop):
     """Minimal length-prefixed echo server standing in for the QGIS plugin.
 
-    Returns (port, received) — `received` collects the decoded commands so a
+    Returns (port, received) - `received` collects the decoded commands so a
     test can prove which socket a call actually reached.
     """
     import socket as socket_mod
@@ -2899,7 +2980,7 @@ async def test_edit_session_lifecycle(mock_connection):
 
 @pytest.mark.asyncio
 async def test_rollback_edits_declined(mock_connection):
-    """A declined rollback must never reach the plugin — the buffer is unrecoverable."""
+    """A declined rollback must never reach the plugin - the buffer is unrecoverable."""
     from qgis_mcp.server import rollback_edits
 
     output = await rollback_edits(_make_ctx(elicitation="decline"), layer_id="lyr")
@@ -2968,6 +3049,38 @@ async def test_list_connections_filters_by_provider(mock_connection):
 
 
 @pytest.mark.asyncio
+async def test_create_postgresql_connection_uses_auth_config_and_long_timeout(mock_connection):
+    from qgis_mcp.server import create_postgresql_connection
+
+    mock_connection.send_command.return_value = {
+        "status": "success",
+        "result": {"ok": True, "name": "warehouse", "validated": True},
+    }
+    output = await create_postgresql_connection(
+        _make_ctx(),
+        name="warehouse",
+        host="db.example.test",
+        port=5433,
+        database="gis",
+        auth_config_id="authcfg1",
+        ssl_mode="verify-full",
+    )
+    assert output == {"ok": True, "name": "warehouse", "validated": True}
+    mock_connection.send_command.assert_called_once_with(
+        "create_postgresql_connection",
+        {
+            "name": "warehouse",
+            "host": "db.example.test",
+            "port": 5433,
+            "database": "gis",
+            "auth_config_id": "authcfg1",
+            "ssl_mode": "verify-full",
+        },
+        timeout=60,
+    )
+
+
+@pytest.mark.asyncio
 async def test_add_layer_from_connection_returns_resource_link(mock_connection):
     from qgis_mcp.server import add_layer_from_connection
 
@@ -2984,7 +3097,7 @@ async def test_add_layer_from_connection_returns_resource_link(mock_connection):
 
 @pytest.mark.asyncio
 async def test_execute_connection_sql_requires_confirmation(mock_connection):
-    """Server-side SQL can drop tables — a declined prompt must not send it."""
+    """Server-side SQL can drop tables - a declined prompt must not send it."""
     from qgis_mcp.server import execute_connection_sql
 
     output = await execute_connection_sql(
@@ -3025,3 +3138,75 @@ def test_confirmation_gated_commands_blocked_in_batch():
         "execute_connection_sql",
         "import_layer_to_connection",
     } <= BATCH_BLOCKED_COMMANDS
+
+
+# ---------------------------------------------------------------------------
+# Version drift between the plugin and the MCP server
+# ---------------------------------------------------------------------------
+
+
+def test_client_announces_its_version_on_every_command():
+    """The plugin can only warn about drift if the client says who it is."""
+    from qgis_mcp.client import QgisMCPClient
+    from qgis_mcp.protocol import HEADER_STRUCT, get_client_version
+
+    client = QgisMCPClient()
+    client.socket = MagicMock()
+    sent = []
+    client.socket.sendall.side_effect = lambda chunk: sent.append(chunk)
+    # Framing needs a reply; a minimal success envelope is enough.
+    reply = b'{"status":"success"}'
+    with patch.object(QgisMCPClient, "_recv_exact") as recv:
+        recv.side_effect = [HEADER_STRUCT.pack(len(reply)), reply]
+        client.send_command("ping")
+
+    payload = b"".join(sent)
+    assert b'"client_version"' in payload, payload
+    assert get_client_version().encode() in payload, payload
+
+
+def test_diagnose_mismatch_carries_an_actionable_fix():
+    """A reported mismatch is useless unless it says what to run."""
+    from qgis_mcp.helpers import enrich_diagnose
+
+    result = {"status": "healthy", "checks": [{"name": "plugin_version", "detail": "9.9.9"}]}
+    with patch("qgis_mcp.helpers.get_client_version", return_value="0.1.0"):
+        enriched = enrich_diagnose(result)
+    check = next(c for c in enriched["checks"] if c["name"] == "version_match")
+    assert check["status"] == "mismatch"
+    fix = check["detail"]["fix"]
+    assert fix, check
+    # Whichever install type is detected, the command must be runnable as-is.
+    assert fix.startswith("uv "), fix
+    assert "cache clean" in fix or "sync" in fix, fix
+    # Never tell someone to move their own working tree around. Matched on a git
+    # *invocation*, not the substring: a repo path may well contain "git".
+    assert "git pull" not in fix, fix
+    assert not re.search(r"(^|\s|&&)\s*git\s", fix), fix
+    # A mismatch is advisory, and the report has to say so.
+    assert "recommended" in check["detail"]["note"], check
+
+
+def test_diagnose_match_has_no_fix_field():
+    """No mismatch, no instruction - the field is the signal, not decoration."""
+    from qgis_mcp.helpers import enrich_diagnose
+
+    result = {"status": "healthy", "checks": [{"name": "plugin_version", "detail": "1.2.3"}]}
+    with patch("qgis_mcp.helpers.get_client_version", return_value="1.2.3"):
+        enriched = enrich_diagnose(result)
+    check = next(c for c in enriched["checks"] if c["name"] == "version_match")
+    assert check["status"] == "ok"
+    assert "fix" not in check["detail"]
+
+
+def test_client_version_is_length_capped():
+    """It reaches a QGIS user, so it is bounded before it goes on the wire."""
+    from qgis_mcp import protocol
+
+    original = protocol._client_version
+    try:
+        protocol._client_version = None
+        with patch("qgis_mcp.protocol.importlib.metadata.version", return_value="x" * 200):
+            assert len(protocol.get_client_version()) == protocol.MAX_VERSION_LENGTH
+    finally:
+        protocol._client_version = original

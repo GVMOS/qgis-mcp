@@ -12,11 +12,11 @@ description: qgis-mcp version bump, changelog, linting, and plugin install steps
 
 The QGIS plugin repository rejects uploads if the version already exists, so always bump all three together.
 
-**Always add a new `changelog=` entry in `qgis_mcp_plugin/metadata.txt`** when bumping the version. Prepend the new `X.Y.Z :` block above the previous one, summarizing the user-facing changes since the last release **in 1–3 short lines** — terse, with issue refs, no prose paragraphs. Escape any literal `%` as `%%` (QGIS parses the metadata with `%`-interpolation). Do not bump the version without updating the changelog.
+**Always add a new `changelog=` entry in `qgis_mcp_plugin/metadata.txt`** when bumping the version. Prepend the new `X.Y.Z :` block above the previous one, summarizing the user-facing changes since the last release **in 1–3 short lines** - terse, with issue refs, no prose paragraphs. Escape any literal `%` as `%%` (QGIS parses the metadata with `%`-interpolation). Do not bump the version without updating the changelog.
 
-**Keep only the two most recent minor series in `changelog=`** — the Plugin Manager shows the whole field, so a full history is unreadable there. On 0.10.0, keep the 0.10.x and 0.9.x blocks and drop 0.8.x, keeping the trailing `Earlier releases: https://github.com/nkarasiak/qgis-mcp/releases` line. Before dropping a block, make sure its text is on the matching GitHub release — the release Action creates the release with an **empty body**, so notes only exist there if they were added by hand (v0.7.0, v0.7.1 and v0.8.0 are currently empty; the old text is recoverable from `git show v0.8.0:qgis_mcp_plugin/metadata.txt`).
+**Keep only the two most recent minor series in `changelog=`** - the Plugin Manager shows the whole field, so a full history is unreadable there. On 0.10.0, keep the 0.10.x and 0.9.x blocks and drop 0.8.x, keeping the trailing `Earlier releases: https://github.com/nkarasiak/qgis-mcp/releases` line. Before dropping a block, make sure its text is on the matching GitHub release - the release Action creates the release with an **empty body**, so notes only exist there if they were added by hand (v0.7.0, v0.7.1 and v0.8.0 are currently empty; the old text is recoverable from `git show v0.8.0:qgis_mcp_plugin/metadata.txt`).
 
-**Release work lands on `dev` and is tagged there, but `uvx git+...` installs the server from the default branch `main`.** Before tagging a release, fast-forward `dev` → `main` (`git merge --ff-only origin/dev`) so the published server code matches the plugin — bumping only the version string on `main` makes `diagnose` falsely report `ok` while the new tools are missing (see issue #10).
+**Release work lands on `dev` and is tagged there, but `uvx git+...` installs the server from the default branch `main`.** Before tagging a release, fast-forward `dev` → `main` (`git merge --ff-only origin/dev`) so the published server code matches the plugin - bumping only the version string on `main` makes `diagnose` falsely report `ok` while the new tools are missing (see issue #10).
 
 ## Publishing to plugins.qgis.org
 
@@ -30,7 +30,7 @@ Authorization: Bearer $QGIS_PLUGIN_TOKEN
 
 The token is per-plugin, created at `https://plugins.qgis.org/plugins/qgis_mcp_plugin/tokens/create/` while logged in, and stored as the `QGIS_PLUGIN_TOKEN` repository secret. If the secret is absent the step logs and skips, so the GitHub release still succeeds.
 
-Upload is not publication. Every version goes through a two-step flow: upload confirmation email, then an async security scan. Passing the scan only makes the version *available for manual approval* by QGIS staff (approvals happen most weekdays, not weekends) — that is why a version can pass its checks and still sit unpublished. `auto_approve_after_scan=true` skips the manual wait, but only for uploaders holding the `can_approve` permission; request trusted status via the QGIS Developer mailing list. Check status any time at `https://plugins.qgis.org/plugins/qgis_mcp_plugin/version/<version>/` (Security tab) or `GET /plugins/api/qgis_mcp_plugin/version/<version>/json` with the same Bearer token.
+Upload is not publication. Every version goes through a two-step flow: upload confirmation email, then an async security scan. Passing the scan only makes the version *available for manual approval* by QGIS staff (approvals happen most weekdays, not weekends) - that is why a version can pass its checks and still sit unpublished. `auto_approve_after_scan=true` skips the manual wait, but only for uploaders holding the `can_approve` permission; request trusted status via the QGIS Developer mailing list. Check status any time at `https://plugins.qgis.org/plugins/qgis_mcp_plugin/version/<version>/` (Security tab) or `GET /plugins/api/qgis_mcp_plugin/version/<version>/json` with the same Bearer token.
 
 ## Linting Before Plugin Upload
 
@@ -41,7 +41,7 @@ uv run --no-sync ruff check qgis_mcp_plugin/ src/    # E/F/W/I/UP/B/SIM/RUF
 uv run --no-sync flake8 qgis_mcp_plugin/             # mirrors uploader (W503 on, via .flake8)
 ```
 
-For W503, refactor the boolean onto fewer lines (extract sub-expressions) rather than breaking across the operator — Black/ruff formatting produces the W503 form the uploader rejects.
+For W503, refactor the boolean onto fewer lines (extract sub-expressions) rather than breaking across the operator - Black/ruff formatting produces the W503 form the uploader rejects.
 
 ## Plugin Installation
 

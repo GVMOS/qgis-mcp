@@ -20,6 +20,7 @@ from qgis.core import (
     QgsAggregateCalculator,
     QgsColorRampShader,
     QgsContrastEnhancement,
+    QgsDataSourceUri,
     QgsLayoutExporter,
     QgsMapLayer,
     QgsProcessingParameterDefinition,
@@ -27,6 +28,7 @@ from qgis.core import (
     QgsProcessingParameterNumber,
     QgsRasterBandStats,
     QgsSingleBandGrayRenderer,
+    QgsUnitTypes,
     QgsVectorLayerExporter,
     QgsVectorSimplifyMethod,
     QgsWkbTypes,
@@ -106,9 +108,21 @@ TOOLBUTTON_ICON_ONLY = _enum(
 )
 PAINTER_ANTIALIAS = _enum((QPainter, "RenderHint.Antialiasing"), (QPainter, "Antialiasing"))
 ALIGN_CENTER = _enum((Qt, "AlignmentFlag.AlignCenter"), (Qt, "AlignCenter"))
+TEXT_SELECTABLE_BY_MOUSE = _enum(
+    (Qt, "TextInteractionFlag.TextSelectableByMouse"),
+    (Qt, "TextSelectableByMouse"),
+)
 MSGBOX_QUESTION = _enum((QMessageBox, "Icon.Question"), (QMessageBox, "Question"))
 MSGBOX_ACCEPT_ROLE = _enum((QMessageBox, "ButtonRole.AcceptRole"), (QMessageBox, "AcceptRole"))
 MSGBOX_REJECT_ROLE = _enum((QMessageBox, "ButtonRole.RejectRole"), (QMessageBox, "RejectRole"))
+
+# ── Render units (layout text sizing) ────────────────────────────────
+# Qgis.RenderUnit arrived in 3.30; QgsUnitTypes.RenderPoints covers 3.28.
+RENDER_UNIT_POINTS = _enum(
+    (Qgis, "RenderUnit.Points"),
+    (QgsUnitTypes, "RenderUnit.RenderPoints"),
+    (QgsUnitTypes, "RenderPoints"),
+)
 
 # ── Vector simplification hints ─────────────────────────────────────
 SIMPLIFY_GEOMETRY = _enum(
@@ -230,6 +244,18 @@ CONN_CAP_SQL_LAYERS = _enum(
 CONN_CAP_EXECUTE_SQL = _enum(
     (QgsAbstractDatabaseProviderConnection, "Capability.ExecuteSql"),
     (QgsAbstractDatabaseProviderConnection, "ExecuteSql"),
+)
+
+# ── Data source URI SSL modes ────────────────────────────────────────
+URI_SSL_PREFER = _enum((QgsDataSourceUri, "SslMode.SslPrefer"), (QgsDataSourceUri, "SslPrefer"))
+URI_SSL_DISABLE = _enum((QgsDataSourceUri, "SslMode.SslDisable"), (QgsDataSourceUri, "SslDisable"))
+URI_SSL_ALLOW = _enum((QgsDataSourceUri, "SslMode.SslAllow"), (QgsDataSourceUri, "SslAllow"))
+URI_SSL_REQUIRE = _enum((QgsDataSourceUri, "SslMode.SslRequire"), (QgsDataSourceUri, "SslRequire"))
+URI_SSL_VERIFY_CA = _enum(
+    (QgsDataSourceUri, "SslMode.SslVerifyCa"), (QgsDataSourceUri, "SslVerifyCa")
+)
+URI_SSL_VERIFY_FULL = _enum(
+    (QgsDataSourceUri, "SslMode.SslVerifyFull"), (QgsDataSourceUri, "SslVerifyFull")
 )
 
 # ── Vector layer export result ───────────────────────────────────────
