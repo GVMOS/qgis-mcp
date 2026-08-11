@@ -4,22 +4,125 @@ The socket server lives in :mod:`qgis_mcp_plugin.server` and the MCP client
 configurator in :mod:`qgis_mcp_plugin.configurator`.
 """
 
+import base64
 import contextlib
+import errno
+import fnmatch
+import io
 import json
+import math
 import os
+import re
+import secrets
+import shutil
+import socket
+import struct
+import sys
+import tempfile
+import traceback
+from collections import deque
 from pathlib import Path
+from typing import ClassVar
 
-from qgis.core import QgsMessageLog, QgsSettings
-from qgis.PyQt.QtCore import QSize, QTimer, QUrl
-from qgis.PyQt.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPen
+try:
+    from datetime import UTC, datetime
+except ImportError:
+    from datetime import datetime, timezone
+
+    UTC = timezone.utc
+
+from qgis.core import (
+    Qgis,
+    QgsAbstractDatabaseProviderConnection,
+    QgsApplication,
+    QgsCategorizedSymbolRenderer,
+    QgsClassificationEqualInterval,
+    QgsColorRampShader,
+    QgsContrastEnhancement,
+    QgsCoordinateReferenceSystem,
+    QgsCoordinateTransform,
+    QgsDataSourceUri,
+    QgsExpression,
+    QgsExpressionContext,
+    QgsExpressionContextUtils,
+    QgsFeature,
+    QgsFeatureRequest,
+    QgsField,
+    QgsGeometry,
+    QgsGraduatedSymbolRenderer,
+    QgsHillshadeRenderer,
+    QgsLayerTreeGroup,
+    QgsLayerTreeLayer,
+    QgsLayoutExporter,
+    QgsLayoutItemMap,
+    QgsLayoutPoint,
+    QgsLayoutSize,
+    QgsMapRendererParallelJob,
+    QgsMapSettings,
+    QgsMessageLog,
+    QgsMultiBandColorRenderer,
+    QgsPointXY,
+    QgsPrintLayout,
+    QgsProcessingModelAlgorithm,
+    QgsProcessingModelChildAlgorithm,
+    QgsProcessingModelChildParameterSource,
+    QgsProcessingModelOutput,
+    QgsProcessingModelParameter,
+    QgsProcessingParameterBoolean,
+    QgsProcessingParameterCrs,
+    QgsProcessingParameterDistance,
+    QgsProcessingParameterEnum,
+    QgsProcessingParameterExtent,
+    QgsProcessingParameterFeatureSource,
+    QgsProcessingParameterField,
+    QgsProcessingParameterFile,
+    QgsProcessingParameterMultipleLayers,
+    QgsProcessingParameterNumber,
+    QgsProcessingParameterPoint,
+    QgsProcessingParameterRasterLayer,
+    QgsProcessingParameterString,
+    QgsProcessingParameterVectorLayer,
+    QgsProject,
+    QgsProviderRegistry,
+    QgsRasterLayer,
+    QgsRasterShader,
+    QgsRectangle,
+    QgsRendererCategory,
+    QgsSettings,
+    QgsSingleBandGrayRenderer,
+    QgsSingleBandPseudoColorRenderer,
+    QgsSingleSymbolRenderer,
+    QgsStyle,
+    QgsSymbol,
+    QgsVectorLayer,
+    QgsVectorLayerExporter,
+    QgsVectorLayerJoinInfo,
+    QgsVectorSimplifyMethod,
+    QgsWkbTypes,
+)
+from qgis.PyQt.QtCore import (
+    QBuffer,
+    QByteArray,
+    QEventLoop,
+    QObject,
+    QPointF,
+    QSize,
+    QTimer,
+    QUrl,
+    QVariant,
+)
+from qgis.PyQt.QtGui import QColor, QDesktopServices, QIcon, QImage, QPainter, QPen
 from qgis.PyQt.QtWidgets import (
     QAction,
     QCheckBox,
+    QComboBox,
     QDialog,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QMenu,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QSpinBox,
     QToolButton,
@@ -29,16 +132,65 @@ from qgis.PyQt.QtWidgets import (
 )
 
 from .compat import (
+    AGG_ARRAY,
+    AGG_COUNT,
+    AGG_MAX,
+    AGG_MEAN,
+    AGG_MIN,
+    AGG_STDEV,
+    AGG_SUM,
     ALIGN_CENTER,
+    CONN_CAP_EXECUTE_SQL,
+    CONN_CAP_SCHEMAS,
+    CONN_CAP_SQL_LAYERS,
+    CONN_TABLE_ASPATIAL,
+    CONN_TABLE_RASTER,
+    CONN_TABLE_VECTOR,
+    CONN_TABLE_VIEW,
+    CONTRAST_CLIP_MINMAX,
+    CONTRAST_NONE,
+    CONTRAST_STRETCH_CLIP_MINMAX,
+    CONTRAST_STRETCH_MINMAX,
+    EXPORT_SUCCESS,
+    GEOM_LINE,
+    GEOM_POLYGON,
+    GRAY_BLACK_TO_WHITE,
+    GRAY_WHITE_TO_BLACK,
+    IODEVICE_WRITEONLY,
+    LAYER_RASTER,
+    LAYER_VECTOR,
+    LAYOUT_SUCCESS,
     MSG_CRITICAL,
     MSG_INFO,
+    MSG_WARNING,
     MSGBOX_ACCEPT_ROLE,
     MSGBOX_QUESTION,
     MSGBOX_REJECT_ROLE,
     PAINTER_ANTIALIAS,
+    PROC_FILE_FOLDER,
+    PROC_NUM_INTEGER,
+    PROCESSING_OPTIONAL,
+    QVAR_BOOL,
+    QVAR_DATE,
+    QVAR_DATETIME,
+    QVAR_DOUBLE,
+    QVAR_INT,
+    QVAR_STRING,
+    RASTER_STATS_ALL,
+    SHADER_CLASS_CONTINUOUS,
+    SHADER_CLASS_EQUAL_INTERVAL,
+    SHADER_CLASS_QUANTILE,
+    SHADER_DISCRETE,
+    SHADER_EXACT,
+    SHADER_INTERPOLATED,
+    SIMPLIFY_ANTIALIAS,
+    SIMPLIFY_GEOMETRY,
     TOOLBUTTON_ICON_ONLY,
     TOOLBUTTON_MENU_POPUP,
+    WKB_NO_GEOMETRY,
 )
+from qgis.utils import active_plugins, available_plugins, pluginMetadata, reloadPlugin
+
 _DEFAULT_HOST = "localhost"
 _DEFAULT_PORT = 9876
 # "someone else already holds this port". EADDRINUSE is the usual answer, and is
